@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FinSight - Personal Finance Analytics",
+  title: "FinSight — Data Engineering Portfolio",
   description:
-    "Personal finance analytics platform with data engineering pipeline, SQL analytics, and AI-powered insights.",
+    "A data engineering portfolio project: 100K messy transactions → SQL transformation → lineage tracking → traceable analytics. Built with PostgreSQL, dbt-style SQL, Python, FastAPI, and Next.js.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

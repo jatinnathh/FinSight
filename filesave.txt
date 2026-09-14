@@ -365,6 +365,120 @@ async def data_quality():
     return {"checks": checks}
 
 
+class IncidentRequest(BaseModel):
+    incident_type: str  # duplicates, missing_categories, invalid_currencies, future_dates, negative_amounts
+
+
+@router.post("/inject-incident")
+async def inject_incident(data: IncidentRequest):
+    """Inject a data quality incident for the Break Pipeline feature."""
+    pool = await get_pool()
+    injected = 0
+
+    async with pool.acquire() as conn:
+        if data.incident_type == "duplicates":
+            # Copy 500 random existing rows with a tag
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id, transaction_date, amount, currency, status, transaction_type,
+                       '__INJECTED_DUPLICATE__'
+                FROM transactions
+                ORDER BY RANDOM()
+                LIMIT 500
+            """)
+            injected = 500
+
+        elif data.incident_type == "invalid_currencies":
+            # Insert 200 rows with bad currency codes
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id, transaction_date, amount,
+                       (ARRAY['XYZ', 'ABC', '123'])[1 + floor(random()*3)::int],
+                       status, transaction_type, '__INJECTED_CURRENCY__'
+                FROM transactions
+                WHERE status = 'completed'
+                ORDER BY RANDOM()
+                LIMIT 200
+            """)
+            injected = 200
+
+        elif data.incident_type == "future_dates":
+            # Insert 150 rows with dates in 2028
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id,
+                       CURRENT_DATE + (30 + floor(random()*365))::int,
+                       amount, currency, status, transaction_type, '__INJECTED_FUTURE__'
+                FROM transactions
+                WHERE status = 'completed'
+                ORDER BY RANDOM()
+                LIMIT 150
+            """)
+            injected = 150
+
+        elif data.incident_type == "negative_amounts":
+            # Insert 100 debit rows with negative amounts
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id, transaction_date,
+                       -ABS(amount), currency, status, 'debit', '__INJECTED_NEGATIVE__'
+                FROM transactions
+                WHERE status = 'completed' AND amount > 0
+                ORDER BY RANDOM()
+                LIMIT 100
+            """)
+            injected = 100
+
+        elif data.incident_type == "missing_categories":
+            # Insert 300 rows with NULL merchant_id
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, NULL, transaction_date, amount, currency, status, transaction_type, '__INJECTED_NOCATEGORY__'
+                FROM transactions
+                WHERE status = 'completed'
+                ORDER BY RANDOM()
+                LIMIT 300
+            """)
+            injected = 300
+
+        else:
+            raise HTTPException(400, f"Unknown incident type: {data.incident_type}")
+
+    return {"injected": injected, "incident_type": data.incident_type}
+
+
+@router.post("/fix-incident")
+async def fix_incident(data: IncidentRequest):
+    """Remove injected incident records and restore pipeline health."""
+    pool = await get_pool()
+
+    tag_map = {
+        "duplicates": "__INJECTED_DUPLICATE__",
+        "invalid_currencies": "__INJECTED_CURRENCY__",
+        "future_dates": "__INJECTED_FUTURE__",
+        "negative_amounts": "__INJECTED_NEGATIVE__",
+        "missing_categories": "__INJECTED_NOCATEGORY__",
+    }
+
+    tag = tag_map.get(data.incident_type)
+    if not tag:
+        raise HTTPException(400, f"Unknown incident type: {data.incident_type}")
+
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM transactions WHERE description = $1", tag
+        )
+
+    removed = int(result.split()[-1]) if result else 0
+    checks = await run_all_checks()
+
+    return {
+        "removed": removed,
+        "incident_type": data.incident_type,
+        "quality_checks": checks,
+    }
+
+
 QUALITY_DETAIL_QUERIES = {
     "Required columns (account_id, date, amount)": {
         "sql": """
@@ -1089,13 +1203,27 @@ CANONICAL_COLUMNS = [
 
 # Common CSV column aliases
 COLUMN_ALIASES = {
-    "transaction_date": ["date", "transaction_date", "trans_date", "txn_date", "posting_date", "value_date"],
-    "merchant": ["merchant", "description", "merchant_name", "payee", "vendor", "name", "details", "narration", "particulars"],
-    "amount": ["amount", "value", "transaction_amount", "txn_amount", "debit", "sum", "total"],
+    "transaction_date": [
+        "date", "transaction_date", "trans_date", "txn_date", "posting_date",
+        "value_date", "transaction_date", "txn_date", "trade_date", "settlement_date",
+    ],
+    "merchant": [
+        "merchant", "merchant_name", "payee", "vendor", "name",
+        "narration", "particulars", "transaction_description",
+    ],
+    "amount": [
+        "amount", "value", "transaction_amount", "txn_amount", "sum", "total",
+        "debit_amount",
+    ],
     "currency": ["currency", "currency_code", "ccy", "curr"],
     "status": ["status", "transaction_status", "txn_status", "state"],
-    "transaction_type": ["type", "transaction_type", "txn_type", "dr_cr", "debit_credit"],
-    "description": ["description", "memo", "note", "remarks", "reference", "details", "narration"],
+    "transaction_type": [
+        "type", "transaction_type", "txn_type", "dr_cr", "debit_credit",
+    ],
+    "description": [
+        "description", "memo", "note", "remarks", "reference", "details",
+        "narration", "transaction_description",
+    ],
 }
 
 DATE_FORMATS = [
@@ -1196,6 +1324,14 @@ def apply_mapping(rows: list, headers: list, mapping: dict) -> list[dict]:
         if idx is not None:
             header_to_canonical[idx] = canonical
 
+    # Check for a credit_amount column (for split debit/credit CSVs)
+    credit_idx = None
+    headers_lower = [h.strip().lower().replace(" ", "_") for h in headers]
+    for i, h in enumerate(headers_lower):
+        if h in ("credit_amount", "credit"):
+            credit_idx = i
+            break
+
     result = []
     for row in rows:
         record = {}
@@ -1207,9 +1343,18 @@ def apply_mapping(rows: list, headers: list, mapping: dict) -> list[dict]:
                     record[canonical] = parsed
                 elif canonical == "amount":
                     try:
-                        record[canonical] = float(val.replace(",", ""))
+                        parsed_amount = float(val.replace(",", "")) if val else None
                     except ValueError:
-                        record[canonical] = None
+                        parsed_amount = None
+                    # If debit is empty, try credit column
+                    if parsed_amount is None and credit_idx is not None and credit_idx < len(row):
+                        credit_val = row[credit_idx].strip()
+                        if credit_val:
+                            try:
+                                parsed_amount = float(credit_val.replace(",", ""))
+                            except ValueError:
+                                parsed_amount = None
+                    record[canonical] = parsed_amount
                 else:
                     record[canonical] = val if val else None
             else:
@@ -1468,6 +1613,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": source_rows,
             "rows_out": source_rows,
             "duration_seconds": 0.18,
+            "timing_label": "simulated",
             "model": "incoming file",
             "input": "bank export or demo generator",
             "output": "ingestion queue",
@@ -1481,6 +1627,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": source_rows,
             "rows_out": counts["raw"],
             "duration_seconds": 11.34,
+            "timing_label": "simulated",
             "model": "backend.services.ingestion",
             "input": "ingestion queue",
             "output": "raw.transactions",
@@ -1494,6 +1641,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": counts["raw"],
             "rows_out": counts["raw"],
             "duration_seconds": 2.77,
+            "timing_label": "simulated",
             "model": "transactions",
             "input": "Python ingestion",
             "output": "raw.transactions",
@@ -1507,6 +1655,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": counts["raw"],
             "rows_out": counts["staging"],
             "duration_seconds": 4.21,
+            "timing_label": "simulated",
             "model": "stg_transactions",
             "input": "raw.transactions",
             "output": "staging.stg_transactions",
@@ -1525,6 +1674,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": counts["staging"],
             "rows_out": counts["marts"],
             "duration_seconds": 5.06,
+            "timing_label": "simulated",
             "model": "monthly_spending, merchant_metrics",
             "input": "staging.stg_transactions",
             "output": "marts analytics tables",
@@ -1542,6 +1692,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": counts["marts"],
             "rows_out": counts["marts"],
             "duration_seconds": 2.14,
+            "timing_label": "simulated",
             "model": "data_quality_results",
             "input": "staging and marts",
             "output": "quality report",
@@ -1558,6 +1709,7 @@ async def build_pipeline_steps(rows_processed: int | None = None) -> list[dict]:
             "rows_in": counts["marts"],
             "rows_out": counts["marts"],
             "duration_seconds": 0.92,
+            "timing_label": "simulated",
             "model": "dashboard API",
             "input": "marts analytics tables",
             "output": "FinSight dashboard",

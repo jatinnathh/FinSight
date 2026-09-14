@@ -14,13 +14,27 @@ CANONICAL_COLUMNS = [
 
 # Common CSV column aliases
 COLUMN_ALIASES = {
-    "transaction_date": ["date", "transaction_date", "trans_date", "txn_date", "posting_date", "value_date"],
-    "merchant": ["merchant", "description", "merchant_name", "payee", "vendor", "name", "details", "narration", "particulars"],
-    "amount": ["amount", "value", "transaction_amount", "txn_amount", "debit", "sum", "total"],
+    "transaction_date": [
+        "date", "transaction_date", "trans_date", "txn_date", "posting_date",
+        "value_date", "transaction_date", "txn_date", "trade_date", "settlement_date",
+    ],
+    "merchant": [
+        "merchant", "merchant_name", "payee", "vendor", "name",
+        "narration", "particulars", "transaction_description",
+    ],
+    "amount": [
+        "amount", "value", "transaction_amount", "txn_amount", "sum", "total",
+        "debit_amount",
+    ],
     "currency": ["currency", "currency_code", "ccy", "curr"],
     "status": ["status", "transaction_status", "txn_status", "state"],
-    "transaction_type": ["type", "transaction_type", "txn_type", "dr_cr", "debit_credit"],
-    "description": ["description", "memo", "note", "remarks", "reference", "details", "narration"],
+    "transaction_type": [
+        "type", "transaction_type", "txn_type", "dr_cr", "debit_credit",
+    ],
+    "description": [
+        "description", "memo", "note", "remarks", "reference", "details",
+        "narration", "transaction_description",
+    ],
 }
 
 DATE_FORMATS = [
@@ -121,6 +135,14 @@ def apply_mapping(rows: list, headers: list, mapping: dict) -> list[dict]:
         if idx is not None:
             header_to_canonical[idx] = canonical
 
+    # Check for a credit_amount column (for split debit/credit CSVs)
+    credit_idx = None
+    headers_lower = [h.strip().lower().replace(" ", "_") for h in headers]
+    for i, h in enumerate(headers_lower):
+        if h in ("credit_amount", "credit"):
+            credit_idx = i
+            break
+
     result = []
     for row in rows:
         record = {}
@@ -132,9 +154,18 @@ def apply_mapping(rows: list, headers: list, mapping: dict) -> list[dict]:
                     record[canonical] = parsed
                 elif canonical == "amount":
                     try:
-                        record[canonical] = float(val.replace(",", ""))
+                        parsed_amount = float(val.replace(",", "")) if val else None
                     except ValueError:
-                        record[canonical] = None
+                        parsed_amount = None
+                    # If debit is empty, try credit column
+                    if parsed_amount is None and credit_idx is not None and credit_idx < len(row):
+                        credit_val = row[credit_idx].strip()
+                        if credit_val:
+                            try:
+                                parsed_amount = float(credit_val.replace(",", ""))
+                            except ValueError:
+                                parsed_amount = None
+                    record[canonical] = parsed_amount
                 else:
                     record[canonical] = val if val else None
             else:

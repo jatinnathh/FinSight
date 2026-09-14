@@ -11,6 +11,7 @@ interface PipelineStep {
   rows_in?: number;
   rows_out?: number;
   duration_seconds?: number;
+  timing_label?: string;
   model?: string;
   input?: string;
   output?: string;
@@ -165,8 +166,11 @@ export default function PipelinePage() {
               <span className="label">Execution</span>
               <span className="value">
                 {selected.duration_seconds
-                  ? `${selected.duration_seconds.toFixed(2)} seconds`
+                  ? `${selected.duration_seconds.toFixed(2)}s`
                   : selected.time || "-"}
+                {selected.timing_label === "simulated" && (
+                  <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 11 }}> (simulated)</span>
+                )}
               </span>
             </div>
 

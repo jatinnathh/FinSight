@@ -183,6 +183,120 @@ async def data_quality():
     return {"checks": checks}
 
 
+class IncidentRequest(BaseModel):
+    incident_type: str  # duplicates, missing_categories, invalid_currencies, future_dates, negative_amounts
+
+
+@router.post("/inject-incident")
+async def inject_incident(data: IncidentRequest):
+    """Inject a data quality incident for the Break Pipeline feature."""
+    pool = await get_pool()
+    injected = 0
+
+    async with pool.acquire() as conn:
+        if data.incident_type == "duplicates":
+            # Copy 500 random existing rows with a tag
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id, transaction_date, amount, currency, status, transaction_type,
+                       '__INJECTED_DUPLICATE__'
+                FROM transactions
+                ORDER BY RANDOM()
+                LIMIT 500
+            """)
+            injected = 500
+
+        elif data.incident_type == "invalid_currencies":
+            # Insert 200 rows with bad currency codes
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id, transaction_date, amount,
+                       (ARRAY['XYZ', 'ABC', '123'])[1 + floor(random()*3)::int],
+                       status, transaction_type, '__INJECTED_CURRENCY__'
+                FROM transactions
+                WHERE status = 'completed'
+                ORDER BY RANDOM()
+                LIMIT 200
+            """)
+            injected = 200
+
+        elif data.incident_type == "future_dates":
+            # Insert 150 rows with dates in 2028
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id,
+                       CURRENT_DATE + (30 + floor(random()*365))::int,
+                       amount, currency, status, transaction_type, '__INJECTED_FUTURE__'
+                FROM transactions
+                WHERE status = 'completed'
+                ORDER BY RANDOM()
+                LIMIT 150
+            """)
+            injected = 150
+
+        elif data.incident_type == "negative_amounts":
+            # Insert 100 debit rows with negative amounts
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, merchant_id, transaction_date,
+                       -ABS(amount), currency, status, 'debit', '__INJECTED_NEGATIVE__'
+                FROM transactions
+                WHERE status = 'completed' AND amount > 0
+                ORDER BY RANDOM()
+                LIMIT 100
+            """)
+            injected = 100
+
+        elif data.incident_type == "missing_categories":
+            # Insert 300 rows with NULL merchant_id
+            await conn.execute("""
+                INSERT INTO transactions (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                SELECT account_id, NULL, transaction_date, amount, currency, status, transaction_type, '__INJECTED_NOCATEGORY__'
+                FROM transactions
+                WHERE status = 'completed'
+                ORDER BY RANDOM()
+                LIMIT 300
+            """)
+            injected = 300
+
+        else:
+            raise HTTPException(400, f"Unknown incident type: {data.incident_type}")
+
+    return {"injected": injected, "incident_type": data.incident_type}
+
+
+@router.post("/fix-incident")
+async def fix_incident(data: IncidentRequest):
+    """Remove injected incident records and restore pipeline health."""
+    pool = await get_pool()
+
+    tag_map = {
+        "duplicates": "__INJECTED_DUPLICATE__",
+        "invalid_currencies": "__INJECTED_CURRENCY__",
+        "future_dates": "__INJECTED_FUTURE__",
+        "negative_amounts": "__INJECTED_NEGATIVE__",
+        "missing_categories": "__INJECTED_NOCATEGORY__",
+    }
+
+    tag = tag_map.get(data.incident_type)
+    if not tag:
+        raise HTTPException(400, f"Unknown incident type: {data.incident_type}")
+
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM transactions WHERE description = $1", tag
+        )
+
+    removed = int(result.split()[-1]) if result else 0
+    checks = await run_all_checks()
+
+    return {
+        "removed": removed,
+        "incident_type": data.incident_type,
+        "quality_checks": checks,
+    }
+
+
 QUALITY_DETAIL_QUERIES = {
     "Required columns (account_id, date, amount)": {
         "sql": """

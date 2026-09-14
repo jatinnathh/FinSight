@@ -507,10 +507,21 @@ interface AskResult {
   };
 }
 
+const PIPELINE_STEPS = [
+  "Question",
+  "LLM",
+  "Generated SQL",
+  "Validation",
+  "PostgreSQL",
+  "Result",
+  "Answer",
+];
+
 export default function AskPage() {
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<AskResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeStep, setActiveStep] = useState(-1);
   const [history, setHistory] = useState<{ q: string; r: AskResult }[]>([]);
   const [showSql, setShowSql] = useState(true);
 
@@ -518,6 +529,13 @@ export default function AskPage() {
     if (!question.trim()) return;
     setLoading(true);
     setResult(null);
+    setActiveStep(0);
+
+    // Animate pipeline steps
+    for (let i = 0; i <= 6; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      setActiveStep(i);
+    }
 
     try {
       const res = await fetch("/api/v1/ask", {
@@ -527,6 +545,7 @@ export default function AskPage() {
       });
       const data: AskResult = await res.json();
       setResult(data);
+      setActiveStep(6);
       if (data.success) {
         setHistory((h) => [{ q: question, r: data }, ...h]);
       }
@@ -540,7 +559,8 @@ export default function AskPage() {
     <div className="chat-container">
       <h1 className="page-title">Ask FinSight</h1>
       <p className="page-subtitle">
-        Ask a finance question and inspect the SQL guardrail path behind the answer.
+        Ask a finance question. See the full pipeline: LLM → SQL → Validation →
+        PostgreSQL → Answer.
       </p>
 
       <div className="chat-input-row">
@@ -560,6 +580,27 @@ export default function AskPage() {
         </button>
       </div>
 
+      {/* Pipeline flow visualization */}
+      {activeStep >= 0 && (
+        <div className="ask-pipeline">
+          {PIPELINE_STEPS.map((step, i) => (
+            <span key={step} style={{ display: "contents" }}>
+              <span
+                className={`ask-pipeline-step${
+                  i < activeStep ? " done" : i === activeStep ? " active" : ""
+                }`}
+              >
+                {i < activeStep ? "✓ " : ""}
+                {step}
+              </span>
+              {i < PIPELINE_STEPS.length - 1 && (
+                <span className="ask-pipeline-arrow">→</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
       {result && (
         <div className="chat-result">
           <div className="chat-section">
@@ -572,18 +613,6 @@ export default function AskPage() {
           {result.success ? (
             <>
               <div className="chat-section">
-                <div className="chat-section-title">Understanding</div>
-                <div className="step-list">
-                  {inferUnderstanding(result.question || question).map((item) => (
-                    <div className="step-row" key={item}>
-                      <span>{item}</span>
-                      <span className="badge pass">OK</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="chat-section">
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
                   <div className="chat-section-title">Generated SQL</div>
                   <button className="metric-link" onClick={() => setShowSql((v) => !v)}>
@@ -594,30 +623,30 @@ export default function AskPage() {
               </div>
 
               <div className="chat-section">
-                <div className="chat-section-title">Validation</div>
+                <div className="chat-section-title">SQL Validation</div>
                 <div className="step-list">
                   <div className="step-row">
                     <span>Read-only SELECT or WITH query</span>
-                    <span className="badge pass">
-                      {result.validation?.read_only ? "PASS" : "FAIL"}
+                    <span style={{ color: result.validation?.read_only ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                      {result.validation?.read_only ? "✓ PASS" : "✗ FAIL"}
                     </span>
                   </div>
                   <div className="step-row">
                     <span>Valid tables</span>
-                    <span className="badge pass">
-                      {result.validation?.valid_tables ? "PASS" : "FAIL"}
+                    <span style={{ color: result.validation?.valid_tables ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                      {result.validation?.valid_tables ? "✓ PASS" : "✗ FAIL"}
                     </span>
                   </div>
                   <div className="step-row">
                     <span>Valid columns</span>
-                    <span className="badge pass">
-                      {result.validation?.valid_columns ? "PASS" : "FAIL"}
+                    <span style={{ color: result.validation?.valid_columns ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                      {result.validation?.valid_columns ? "✓ PASS" : "✗ FAIL"}
                     </span>
                   </div>
                   <div className="step-row">
                     <span>Query cost acceptable</span>
-                    <span className="badge pass">
-                      {result.validation?.query_cost?.toUpperCase() || "PASS"}
+                    <span style={{ color: "var(--success)", fontWeight: 600 }}>
+                      ✓ {result.validation?.query_cost?.toUpperCase() || "PASS"}
                     </span>
                   </div>
                 </div>
@@ -626,11 +655,11 @@ export default function AskPage() {
               {result.results && result.results.length > 0 && (
                 <div className="chat-section">
                   <div className="chat-section-title">
-                    Result ({result.total_rows} rows)
+                    PostgreSQL Result ({result.total_rows} rows)
                   </div>
                   <div
-                    className="table-container"
-                    style={{ border: "none", maxHeight: 300, overflow: "auto" }}
+                    className="data-table-mini"
+                    style={{ maxHeight: 300, overflow: "auto" }}
                   >
                     <table>
                       <thead>
@@ -645,7 +674,7 @@ export default function AskPage() {
                           <tr key={i}>
                             {Object.values(row).map((val, j) => (
                               <td key={j} style={{ fontSize: 12 }}>
-                                {val === null ? "-" : String(val)}
+                                {val === null ? "—" : String(val)}
                               </td>
                             ))}
                           </tr>
@@ -657,14 +686,14 @@ export default function AskPage() {
               )}
 
               <div className="chat-section">
-                <div className="chat-section-title">Explanation</div>
+                <div className="chat-section-title">Answer</div>
                 <p style={{ fontSize: 13, margin: 0, lineHeight: 1.6 }}>
                   {result.explanation}
                 </p>
               </div>
 
               <div className="chat-section" style={{ fontSize: 11, color: "var(--muted)" }}>
-                Provider: {result.provider} - Bound parameters:{" "}
+                Provider: {result.provider} · Bound parameters:{" "}
                 {result.validation?.bound_parameters || 0}
               </div>
             </>
@@ -705,21 +734,332 @@ export default function AskPage() {
   );
 }
 
-function inferUnderstanding(question: string): string[] {
-  const lower = question.toLowerCase();
-  const items = ["Identified metric: spending"];
+==================== C:\Users\Jatin\Desktop\finsight\app\break-pipeline\page.tsx ====================
+"use client";
 
-  if (lower.includes("last month") || lower.includes("month")) {
-    items.push("Identified time period: monthly");
-  }
-  if (lower.includes("category") || lower.includes("where") || lower.includes("most")) {
-    items.push("Identified grouping: category or merchant");
-  }
-  if (lower.includes("trend") || lower.includes("over time")) {
-    items.push("Identified trend analysis");
+import { useState, useEffect } from "react";
+import Link from "next/link";
+
+type IncidentType =
+  | "duplicates"
+  | "missing_categories"
+  | "invalid_currencies"
+  | "future_dates"
+  | "negative_amounts";
+
+const INCIDENTS: { type: IncidentType; label: string; description: string }[] = [
+  { type: "duplicates", label: "500 duplicate transactions", description: "Insert 500 exact-copy rows to trigger the duplicate check" },
+  { type: "missing_categories", label: "Missing categories", description: "Set category_id to NULL on 300 merchant records" },
+  { type: "invalid_currencies", label: "Invalid currencies", description: "Change 200 transactions to invalid currency codes (XYZ, ABC)" },
+  { type: "future_dates", label: "Future dates", description: "Set 150 transaction dates to next year" },
+  { type: "negative_amounts", label: "Negative non-refund amounts", description: "Make 100 debit transactions have negative amounts" },
+];
+
+type Phase = "select" | "injecting" | "pipeline" | "failed" | "investigating" | "fixing" | "fixed";
+
+interface PipelineStep {
+  name: string;
+  status: "pending" | "running" | "ok" | "error" | "blocked";
+  detail?: string;
+}
+
+export default function BreakPipelinePage() {
+  const [selectedIncident, setSelectedIncident] = useState<IncidentType>("duplicates");
+  const [phase, setPhase] = useState<Phase>("select");
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([]);
+  const [pipelineIdx, setPipelineIdx] = useState(0);
+  const [injectedCount, setInjectedCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const incidentInfo = INCIDENTS.find((i) => i.type === selectedIncident)!;
+
+  // Animate pipeline steps
+  useEffect(() => {
+    if (phase !== "pipeline" && phase !== "fixing") return;
+    if (pipelineIdx >= pipelineSteps.length) {
+      // Pipeline animation done
+      if (phase === "pipeline") {
+        setPhase("failed");
+      } else if (phase === "fixing") {
+        setPhase("fixed");
+      }
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setPipelineSteps((prev) => {
+        const next = [...prev];
+        const step = next[pipelineIdx];
+        if (phase === "fixing") {
+          step.status = "ok";
+          step.detail = undefined;
+        } else {
+          // During inject pipeline, quality step fails
+          if (step.name === "Quality") {
+            step.status = "error";
+            step.detail = `${injectedCount} affected records`;
+          } else if (step.name === "Analytics" && next.find((s) => s.status === "error")) {
+            step.status = "blocked";
+            step.detail = "BLOCKED — upstream failure";
+          } else {
+            step.status = "ok";
+          }
+        }
+        return next;
+      });
+      setPipelineIdx((i) => i + 1);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [phase, pipelineIdx, pipelineSteps.length, injectedCount]);
+
+  async function handleInject() {
+    setPhase("injecting");
+    setError(null);
+    try {
+      const res = await fetch("/api/v1/data/inject-incident", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incident_type: selectedIncident }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.detail || "Injection failed");
+        setPhase("select");
+        return;
+      }
+      setInjectedCount(data.injected || 0);
+
+      // Start pipeline animation
+      setPipelineSteps([
+        { name: "Ingestion", status: "pending" },
+        { name: "Staging", status: "pending" },
+        { name: "Transformation", status: "pending" },
+        { name: "Quality", status: "pending" },
+        { name: "Analytics", status: "pending" },
+      ]);
+      setPipelineIdx(0);
+      setPhase("pipeline");
+    } catch {
+      setError("Could not connect to backend");
+      setPhase("select");
+    }
   }
 
-  return items;
+  async function handleFix() {
+    setPhase("fixing");
+    setError(null);
+    try {
+      const res = await fetch("/api/v1/data/fix-incident", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incident_type: selectedIncident }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.detail || "Fix failed");
+        setPhase("failed");
+        return;
+      }
+
+      // Animate fix pipeline
+      setPipelineSteps([
+        { name: "Remove injected records", status: "pending" },
+        { name: "Re-run quality checks", status: "pending" },
+        { name: "Unlock analytics", status: "pending" },
+      ]);
+      setPipelineIdx(0);
+    } catch {
+      setError("Could not connect to backend");
+      setPhase("failed");
+    }
+  }
+
+  function handleReset() {
+    setPhase("select");
+    setPipelineSteps([]);
+    setPipelineIdx(0);
+    setInjectedCount(0);
+    setError(null);
+  }
+
+  const statusIcon = (s: PipelineStep["status"]) => {
+    switch (s) {
+      case "ok": return <span className="pipeline-sim-icon ok">✓</span>;
+      case "error": return <span className="pipeline-sim-icon error">✗</span>;
+      case "blocked": return <span className="pipeline-sim-icon blocked">—</span>;
+      case "running": return <span className="pipeline-sim-icon pending">…</span>;
+      default: return <span className="pipeline-sim-icon pending">·</span>;
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 700 }}>
+      <h1 className="page-title">Break the Pipeline</h1>
+      <p className="page-subtitle">
+        Inject a data incident, watch the pipeline fail, investigate the SQL
+        problem, then fix it and verify.
+      </p>
+
+      {error && (
+        <div className="card" style={{ marginBottom: 16, borderColor: "var(--danger)" }}>
+          <p style={{ fontSize: 13, margin: 0, color: "var(--danger)" }}>{error}</p>
+        </div>
+      )}
+
+      {/* Step 1: Select incident */}
+      {phase === "select" && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-title">Simulate Data Incident</div>
+            <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+              Choose a problem to inject into the live database.
+            </p>
+            <div className="incident-grid">
+              {INCIDENTS.map((inc) => (
+                <label
+                  key={inc.type}
+                  className={`incident-option${selectedIncident === inc.type ? " selected" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="incident"
+                    checked={selectedIncident === inc.type}
+                    onChange={() => setSelectedIncident(inc.type)}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{inc.label}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                      {inc.description}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <button className="btn btn-danger" onClick={handleInject}>
+              Inject Incident
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Step 2: Injecting */}
+      {phase === "injecting" && (
+        <div className="card" style={{ textAlign: "center", padding: 40 }}>
+          <p style={{ fontSize: 14, fontWeight: 600 }}>Injecting {incidentInfo.label}...</p>
+          <p style={{ fontSize: 12, color: "var(--muted)" }}>Writing bad records to the database</p>
+        </div>
+      )}
+
+      {/* Step 3: Pipeline running */}
+      {(phase === "pipeline" || phase === "failed") && (
+        <>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-title">
+              {phase === "pipeline" ? "Pipeline Running..." : "Pipeline Failed"}
+            </div>
+            <div className="pipeline-sim">
+              {pipelineSteps.map((step, i) => (
+                <div key={step.name}>
+                  <div className="pipeline-sim-step">
+                    {statusIcon(step.status)}
+                    <div>
+                      <div style={{ fontWeight: 500 }}>{step.name}</div>
+                      {step.detail && (
+                        <div style={{
+                          fontSize: 11,
+                          color: step.status === "error" ? "var(--danger)" : "var(--muted)",
+                          marginTop: 2,
+                        }}>
+                          {step.detail}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {i < pipelineSteps.length - 1 && (
+                    <div className="pipeline-sim-connector" />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {phase === "failed" && (
+            <div className="incident-result error-state" style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+                ✗ {incidentInfo.label}
+              </div>
+              <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
+                {injectedCount} records injected — analytics blocked
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                <Link href="/data-quality" className="btn">
+                  Investigate
+                </Link>
+                <button className="btn btn-success" onClick={handleFix}>
+                  Fix &amp; Re-run
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Step 4: Investigating (links) */}
+      {phase === "investigating" && (
+        <div className="card">
+          <div className="card-title">Investigation</div>
+          <p>Check the Data Quality page to see affected records and SQL.</p>
+          <Link href="/data-quality" className="btn btn-primary">
+            Go to Data Quality
+          </Link>
+        </div>
+      )}
+
+      {/* Step 5: Fixing */}
+      {phase === "fixing" && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-title">Fixing Pipeline...</div>
+          <div className="pipeline-sim">
+            {pipelineSteps.map((step, i) => (
+              <div key={step.name}>
+                <div className="pipeline-sim-step">
+                  {statusIcon(step.status)}
+                  <span style={{ fontWeight: 500 }}>{step.name}</span>
+                </div>
+                {i < pipelineSteps.length - 1 && (
+                  <div className="pipeline-sim-connector" />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Step 6: Fixed */}
+      {phase === "fixed" && (
+        <div className="incident-result success-state" style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6, color: "var(--success)" }}>
+            ✓ Pipeline Restored
+          </div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
+            Injected records removed. Quality checks passed. Analytics unlocked.
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <Link href="/data-quality" className="btn">
+              View Quality
+            </Link>
+            <Link href="/dashboard" className="btn">
+              View Dashboard
+            </Link>
+            <button className="btn btn-primary" onClick={handleReset}>
+              Try Another Incident
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 ==================== C:\Users\Jatin\Desktop\finsight\app\budgets\page.tsx ====================
@@ -930,23 +1270,31 @@ export default function AppShell({ children }: { children: ReactNode }) {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const NAV_ITEMS = [
-  { section: "Overview" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/transactions", label: "Transactions" },
-  { href: "/analytics", label: "Analytics" },
-  { section: "Data" },
+const DATA_ITEMS = [
   { href: "/add-data", label: "Add Data" },
-  { href: "/data-quality", label: "Data Quality" },
-  { href: "/transformations", label: "Transformations" },
-  { href: "/lineage", label: "Lineage" },
-  { section: "Pipeline" },
+  { href: "/transactions", label: "Raw Data" },
+];
+
+const PIPELINE_ITEMS = [
   { href: "/pipeline", label: "Pipeline Runs" },
-  { section: "Intelligence" },
-  { href: "/data-detective", label: "Data Detective" },
-  { href: "/ask", label: "Ask FinSight" },
+  { href: "/transformations", label: "Transformations" },
+  { href: "/data-quality", label: "Data Quality" },
+  { href: "/lineage", label: "Lineage" },
+];
+
+const ANALYTICS_ITEMS = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/sql-lab", label: "SQL Lab" },
-  { section: "Finance" },
+  { href: "/data-detective", label: "Data Detective" },
+  { href: "/break-pipeline", label: "Break Pipeline" },
+];
+
+const AI_ITEMS = [
+  { href: "/ask", label: "Ask FinSight" },
+];
+
+const MORE_ITEMS = [
+  { href: "/analytics", label: "Analytics" },
   { href: "/budgets", label: "Budgets" },
   { href: "/subscriptions", label: "Subscriptions" },
 ];
@@ -954,31 +1302,43 @@ const NAV_ITEMS = [
 export default function Sidebar() {
   const pathname = usePathname();
 
+  function renderLinks(items: { href: string; label: string }[]) {
+    return items.map((item) => {
+      const isActive =
+        pathname === item.href ||
+        (item.href !== "/" && pathname?.startsWith(item.href));
+      return (
+        <Link
+          key={item.href}
+          href={item.href}
+          className={`sidebar-link${isActive ? " active" : ""}`}
+        >
+          {item.label}
+        </Link>
+      );
+    });
+  }
+
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">FinSight</div>
+      <Link href="/" className="sidebar-logo" style={{ textDecoration: "none", color: "inherit" }}>
+        FinSight
+      </Link>
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item, i) => {
-          if ("section" in item && item.section) {
-            return (
-              <div key={i} className="sidebar-section">
-                {item.section}
-              </div>
-            );
-          }
-          const isActive =
-            pathname === item.href ||
-            (item.href && item.href !== "/" && pathname?.startsWith(item.href));
-          return (
-            <Link
-              key={item.href}
-              href={item.href || "/"}
-              className={`sidebar-link${isActive ? " active" : ""}`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
+        <div className="sidebar-section">Data</div>
+        {renderLinks(DATA_ITEMS)}
+
+        <div className="sidebar-section">Pipeline</div>
+        {renderLinks(PIPELINE_ITEMS)}
+
+        <div className="sidebar-section">Analytics</div>
+        {renderLinks(ANALYTICS_ITEMS)}
+
+        <div className="sidebar-section">AI</div>
+        {renderLinks(AI_ITEMS)}
+
+        <div className="sidebar-section">More</div>
+        {renderLinks(MORE_ITEMS)}
       </nav>
     </aside>
   );
@@ -988,6 +1348,7 @@ export default function Sidebar() {
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   XAxis,
   YAxis,
@@ -1069,7 +1430,10 @@ export default function DashboardPage() {
   return (
     <div>
       <h1 className="page-title">Dashboard</h1>
-      <p className="page-subtitle">This month</p>
+      <p className="page-subtitle">
+        Every number is traceable. Click &ldquo;ⓘ How calculated&rdquo; to see
+        the SQL, source model, and lineage.
+      </p>
 
       <div className="metrics-grid">
         <div className="card">
@@ -1084,7 +1448,7 @@ export default function DashboardPage() {
             {overview.change_percent}% vs last month
           </div>
           <button className="metric-link" onClick={() => setSelectedMetric("total")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
         <div className="card">
@@ -1093,7 +1457,7 @@ export default function DashboardPage() {
             {formatCurrency(overview.avg_transaction)}
           </div>
           <button className="metric-link" onClick={() => setSelectedMetric("average")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
         <div className="card">
@@ -1102,7 +1466,7 @@ export default function DashboardPage() {
             {overview.total_transactions.toLocaleString()}
           </div>
           <button className="metric-link" onClick={() => setSelectedMetric("transactions")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
         <div className="card">
@@ -1112,7 +1476,7 @@ export default function DashboardPage() {
           </div>
           <div className="card-change">/month</div>
           <button className="metric-link" onClick={() => setSelectedMetric("subscriptions")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
       </div>
@@ -1216,10 +1580,10 @@ export default function DashboardPage() {
 }
 
 function formatCurrency(n: number): string {
-  if (n >= 10000000) return `${(n / 10000000).toFixed(1)}Cr`;
-  if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return n.toFixed(0);
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
+  return `₹${n.toFixed(0)}`;
 }
 
 const metricDefinitions: Record<
@@ -1231,6 +1595,7 @@ const metricDefinitions: Record<
     filters: string;
     aggregation: string;
     sql: string;
+    lineageNode: string;
   }
 > = {
   total: {
@@ -1239,6 +1604,7 @@ const metricDefinitions: Record<
     model: "monthly_spending.sql",
     filters: "status = 'completed', amount > 0, current month",
     aggregation: "SUM(amount)",
+    lineageNode: "monthly",
     sql: `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_spending
 FROM transactions
 WHERE status = 'completed'
@@ -1250,6 +1616,7 @@ WHERE status = 'completed'
     model: "monthly_spending.sql",
     filters: "status = 'completed', amount > 0, current month",
     aggregation: "AVG(amount)",
+    lineageNode: "monthly",
     sql: `SELECT COALESCE(AVG(CASE WHEN amount > 0 THEN amount END), 0) AS avg_transaction
 FROM transactions
 WHERE status = 'completed'
@@ -1261,6 +1628,7 @@ WHERE status = 'completed'
     model: "stg_transactions.sql",
     filters: "status = 'completed', current month",
     aggregation: "COUNT(*)",
+    lineageNode: "stg",
     sql: `SELECT COUNT(*) AS total_transactions
 FROM transactions
 WHERE status = 'completed'
@@ -1272,6 +1640,7 @@ WHERE status = 'completed'
     model: "subscription_detection.sql",
     filters: "recurring merchants with similar amount and interval",
     aggregation: "SUM(monthly amount)",
+    lineageNode: "merchant",
     sql: `SELECT COALESCE(SUM(amount), 0) AS total
 FROM subscriptions;`,
   },
@@ -1313,10 +1682,18 @@ function MetricDisclosure({
         </div>
         <div>
           <div className="card-title">Aggregation</div>
-          <div style={{ fontSize: 13 }}>{metric.aggregation}</div>
+          <div style={{ fontSize: 13, fontFamily: "var(--font-mono), monospace" }}>{metric.aggregation}</div>
         </div>
       </div>
       <div className="sql-block">{metric.sql}</div>
+      <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+        <Link href="/lineage" className="btn">
+          View Lineage
+        </Link>
+        <Link href="/data-quality" className="btn">
+          View Quality Checks
+        </Link>
+      </div>
     </div>
   );
 }
@@ -1325,6 +1702,7 @@ function MetricDisclosure({
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 interface DetectiveData {
   current_month_spending: number;
@@ -1340,11 +1718,11 @@ interface DetectiveData {
 
 const investigationSteps = [
   "Checking data freshness",
-  "Checking duplicates",
-  "Checking missing merchants",
-  "Checking refunds",
-  "Checking currency conversion",
-  "Comparing merchant distribution",
+  "Checking duplicate records",
+  "Checking merchant distribution",
+  "Checking refund activity",
+  "Checking currency anomalies",
+  "Comparing spending patterns",
 ];
 
 export default function DataDetectivePage() {
@@ -1454,38 +1832,28 @@ WHERE transaction_type = 'refund';`,
     <div style={{ maxWidth: 860 }}>
       <h1 className="page-title">Data Detective</h1>
       <p className="page-subtitle">
-        Investigate spending changes and data-quality anomalies from the pipeline.
+        Investigate spending changes and trace every conclusion back to evidence.
       </p>
 
-      <div className="card" style={{ marginBottom: 24 }}>
-        <div className="card-title">
-          {hasAnomaly
-            ? `Spending changed ${Math.abs(data.change_percent)}% this month`
-            : "No major spending swing detected"}
+      {/* Alert banner */}
+      <div className="detective-alert">
+        <div className="detective-alert-title">
+          {hasAnomaly ? "Something changed." : "No major spending swing detected"}
         </div>
-        <div style={{ display: "flex", gap: 24, margin: "12px 0", flexWrap: "wrap" }}>
+        <div className="detective-alert-value">
+          Spending {data.change_percent >= 0 ? "↑" : "↓"} {Math.abs(data.change_percent)}%
+        </div>
+        <div style={{ display: "flex", gap: 24, justifyContent: "center", marginBottom: 20 }}>
           <div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>Previous Month</div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                fontFamily: "var(--font-mono), monospace",
-              }}
-            >
-              {data.previous_month_spending.toLocaleString()}
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
+              ₹{data.previous_month_spending.toLocaleString()}
             </div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>Current Month</div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                fontFamily: "var(--font-mono), monospace",
-              }}
-            >
-              {data.current_month_spending.toLocaleString()}
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
+              ₹{data.current_month_spending.toLocaleString()}
             </div>
           </div>
         </div>
@@ -1507,9 +1875,13 @@ WHERE transaction_type = 'refund';`,
             {investigationSteps.map((step, index) => (
               <div className="step-row" key={step}>
                 <span>{step}</span>
-                <span className={`badge ${completedSteps > index ? "pass" : "info"}`}>
-                  {completedSteps > index ? "DONE" : investigating ? "..." : "WAIT"}
-                </span>
+                {completedSteps > index ? (
+                  <span style={{ color: "var(--success)", fontWeight: 600 }}>✓</span>
+                ) : investigating ? (
+                  <span style={{ color: "var(--muted)" }}>…</span>
+                ) : (
+                  <span style={{ color: "var(--muted)" }}>·</span>
+                )}
               </div>
             ))}
           </div>
@@ -1539,6 +1911,17 @@ WHERE transaction_type = 'refund';`,
               <div style={{ marginTop: 18 }}>
                 <div className="card-title">SQL</div>
                 <div className="sql-block">{rootCause.sql}</div>
+              </div>
+              <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Link href="/data-quality" className="btn">
+                  View Records
+                </Link>
+                <Link href="/lineage" className="btn">
+                  View Lineage
+                </Link>
+                <Link href="/pipeline" className="btn">
+                  View Pipeline Run
+                </Link>
               </div>
             </>
           ) : (
@@ -1576,6 +1959,7 @@ WHERE transaction_type = 'refund';`,
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 interface Check {
   check_name: string;
@@ -1596,6 +1980,7 @@ export default function DataQualityPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [showRecords, setShowRecords] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -1625,14 +2010,13 @@ export default function DataQualityPage() {
       return;
     }
     const checkName = selected.check_name;
+    setShowRecords(false);
 
     async function loadDetail() {
       setDetailLoading(true);
       try {
         const res = await fetch(
-          `/api/v1/data/quality/detail?check_name=${encodeURIComponent(
-            checkName
-          )}`
+          `/api/v1/data/quality/detail?check_name=${encodeURIComponent(checkName)}`
         );
         if (res.ok) {
           setDetail(await res.json());
@@ -1656,21 +2040,22 @@ export default function DataQualityPage() {
     <div>
       <h1 className="page-title">Data Quality</h1>
       <p className="page-subtitle">
-        Click a check to inspect affected records and the SQL behind it.
+        Investigate data-quality failures. Click a check to see the SQL and
+        affected records.
       </p>
 
       <div className="metrics-grid" style={{ marginBottom: 24 }}>
         <div className="card">
           <div className="card-title">Passed</div>
-          <div className="card-value">{passed}</div>
+          <div className="card-value" style={{ color: "var(--success)" }}>{passed}</div>
         </div>
         <div className="card">
           <div className="card-title">Warnings</div>
-          <div className="card-value">{warned}</div>
+          <div className="card-value" style={{ color: "var(--warning)" }}>{warned}</div>
         </div>
         <div className="card">
           <div className="card-title">Failed</div>
-          <div className="card-value">{failed}</div>
+          <div className="card-value" style={{ color: "var(--danger)" }}>{failed}</div>
         </div>
       </div>
 
@@ -1695,12 +2080,12 @@ export default function DataQualityPage() {
             >
               <span className={`check-icon ${check.status}`}>
                 {check.status === "pass"
-                  ? "v"
+                  ? "✓"
                   : check.status === "warn"
-                    ? "!"
+                    ? "⚠"
                     : check.status === "fail"
-                      ? "x"
-                      : "-"}
+                      ? "✗"
+                      : "·"}
               </span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 500 }}>{check.check_name}</div>
@@ -1711,9 +2096,10 @@ export default function DataQualityPage() {
               {check.affected_rows > 0 && check.status !== "info" && (
                 <span
                   style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     fontFamily: "var(--font-mono), monospace",
-                    color: "var(--muted)",
+                    fontWeight: 600,
+                    color: check.status === "fail" ? "var(--danger)" : "var(--warning)",
                   }}
                 >
                   {check.affected_rows.toLocaleString()}
@@ -1729,7 +2115,7 @@ export default function DataQualityPage() {
             <>
               <div className="detective-stat">
                 <span className="label">Status</span>
-                <span className={`badge ${selected.status}`}>
+                <span className={`badge ${selected.status === "pass" ? "success-badge" : selected.status === "fail" ? "danger-badge" : selected.status === "warn" ? "warn-badge" : ""}`}>
                   {selected.status.toUpperCase()}
                 </span>
               </div>
@@ -1742,8 +2128,30 @@ export default function DataQualityPage() {
 
               {!detailLoading && selected.status !== "info" && detail && (
                 <>
-                  {detail.records.length > 0 ? (
+                  {/* SQL Section — always shown for investigation */}
+                  {detail.sql && (
                     <div style={{ marginTop: 18 }}>
+                      <div className="card-title">SQL Check</div>
+                      <div className="sql-block">{detail.sql}</div>
+                    </div>
+                  )}
+
+                  {/* Show Records toggle */}
+                  {detail.records.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
+                      <button
+                        className="btn"
+                        onClick={() => setShowRecords(!showRecords)}
+                      >
+                        {showRecords
+                          ? "Hide Records"
+                          : `Show ${detail.records.length} Records`}
+                      </button>
+                    </div>
+                  )}
+
+                  {showRecords && detail.records.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
                       <div className="card-title">Affected Records</div>
                       <div className="data-table-mini">
                         <table>
@@ -1768,18 +2176,22 @@ export default function DataQualityPage() {
                         </table>
                       </div>
                     </div>
-                  ) : (
-                    <p style={{ color: "var(--muted)", fontSize: 13 }}>
+                  )}
+
+                  {detail.records.length === 0 && (
+                    <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 14 }}>
                       No affected records found for this check.
                     </p>
                   )}
 
-                  {detail.sql && (
-                    <div style={{ marginTop: 18 }}>
-                      <div className="card-title">SQL Check</div>
-                      <div className="sql-block">{detail.sql}</div>
-                    </div>
-                  )}
+                  <div style={{ marginTop: 18, display: "flex", gap: 8 }}>
+                    <Link href="/lineage" className="btn">
+                      View Lineage
+                    </Link>
+                    <Link href="/pipeline" className="btn">
+                      View Pipeline
+                    </Link>
+                  </div>
                 </>
               )}
             </>
@@ -1798,6 +2210,7 @@ export default function DataQualityPage() {
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 type Model = {
   id: string;
@@ -1806,16 +2219,30 @@ type Model = {
   output: string;
   usedBy: string[];
   sql: string;
+  description: string;
 };
 
 const models: Model[] = [
   {
+    id: "csv",
+    label: "CSV / API",
+    source: "Bank export, demo generator, or future API ingestion",
+    output: "raw.transactions",
+    usedBy: ["raw.transactions"],
+    description: "External data source",
+    sql: `-- No SQL at this layer
+-- Data arrives as CSV files or API payloads
+-- The Python ingestion service parses and loads rows`,
+  },
+  {
     id: "raw",
     label: "raw.transactions",
-    source: "CSV upload, demo generator, or future API ingestion",
+    source: "CSV / API",
     output: "stg_transactions",
     usedBy: ["stg_transactions"],
-    sql: `SELECT *
+    description: "100K raw records in PostgreSQL",
+    sql: `-- Raw layer: exact copy of source data
+SELECT *
 FROM transactions;`,
   },
   {
@@ -1824,6 +2251,7 @@ FROM transactions;`,
     source: "raw.transactions",
     output: "int_clean_transactions",
     usedBy: ["int_clean_transactions", "Data Quality"],
+    description: "Normalized currencies, statuses, timestamps",
     sql: `SELECT
   transaction_id,
   account_id,
@@ -1843,6 +2271,7 @@ WHERE transaction_date IS NOT NULL
     source: "stg_transactions",
     output: "monthly_spending, merchant_metrics",
     usedBy: ["monthly_spending", "merchant_metrics"],
+    description: "Joined with merchants and categories, filtered for valid records",
     sql: `SELECT
   t.*,
   COALESCE(m.normalized_name, t.description, 'Unknown') AS merchant,
@@ -1857,8 +2286,9 @@ WHERE t.currency IN ('INR', 'USD', 'EUR', 'GBP')
     id: "monthly",
     label: "monthly_spending",
     source: "int_clean_transactions",
-    output: "dashboard",
+    output: "Dashboard",
     usedBy: ["Dashboard", "Analytics", "Ask FinSight"],
+    description: "Monthly spending aggregation per account",
     sql: `WITH monthly AS (
   SELECT
     account_id,
@@ -1876,8 +2306,9 @@ FROM monthly;`,
     id: "merchant",
     label: "merchant_metrics",
     source: "int_clean_transactions",
-    output: "analytics",
+    output: "Analytics",
     usedBy: ["Analytics", "Data Detective", "Ask FinSight"],
+    description: "Merchant-level aggregation with categories",
     sql: `SELECT
   merchant,
   category,
@@ -1890,11 +2321,13 @@ GROUP BY merchant, category;`,
   },
   {
     id: "dashboard",
-    label: "dashboard",
+    label: "Dashboard",
     source: "monthly_spending, merchant_metrics",
     output: "FinSight UI",
     usedBy: ["Recruiter demo", "User decisions"],
-    sql: `SELECT
+    description: "Final analytics layer served to the UI",
+    sql: `-- Dashboard queries the mart models
+SELECT
   SUM(spending) AS total_spending
 FROM monthly_spending
 WHERE month = DATE_TRUNC('month', CURRENT_DATE);`,
@@ -1902,19 +2335,22 @@ WHERE month = DATE_TRUNC('month', CURRENT_DATE);`,
 ];
 
 export default function LineagePage() {
-  const [selectedId, setSelectedId] = useState("monthly");
+  const [selectedId, setSelectedId] = useState("int");
   const selected = models.find((model) => model.id === selectedId) || models[0];
 
   return (
     <div>
-      <h1 className="page-title">Lineage</h1>
+      <h1 className="page-title">Data Lineage</h1>
       <p className="page-subtitle">
-        Trace a dashboard number back through source data, SQL models, and quality checks.
+        Trace any dashboard number back through the SQL pipeline to raw source
+        data. Click a node to inspect its model.
       </p>
 
       <div className="detail-grid">
         <div className="lineage-canvas">
           <div className="lineage-graph">
+            <LineageNode modelId="csv" selectedId={selectedId} onSelect={setSelectedId} />
+            <Connector />
             <LineageNode modelId="raw" selectedId={selectedId} onSelect={setSelectedId} />
             <Connector />
             <LineageNode modelId="stg" selectedId={selectedId} onSelect={setSelectedId} />
@@ -1931,9 +2367,18 @@ export default function LineagePage() {
         </div>
 
         <div className="detail-panel">
-          <div className="card-title">{selected.label}</div>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "1px", color: "var(--muted)", marginBottom: 4 }}>
+            Model
+          </div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 4px", fontFamily: "var(--font-mono), monospace" }}>
+            {selected.label}
+          </h2>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16, lineHeight: 1.5 }}>
+            {selected.description}
+          </p>
+
           <div className="detective-stat">
-            <span className="label">Source</span>
+            <span className="label">Input</span>
             <span className="value">{selected.source}</span>
           </div>
           <div className="detective-stat">
@@ -1942,20 +2387,29 @@ export default function LineagePage() {
           </div>
 
           <div style={{ marginTop: 18 }}>
-            <div className="card-title">SQL</div>
-            <div className="sql-block">{selected.sql}</div>
-          </div>
-
-          <div style={{ marginTop: 18 }}>
             <div className="card-title">Used By</div>
             <div className="step-list">
               {selected.usedBy.map((consumer) => (
                 <div className="step-row" key={consumer}>
                   <span>{consumer}</span>
-                  <span className="badge info">CONSUMER</span>
+                  <span className="badge" style={{ fontSize: 10 }}>CONSUMER</span>
                 </div>
               ))}
             </div>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <div className="card-title">SQL</div>
+            <div className="sql-block">{selected.sql}</div>
+          </div>
+
+          <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Link href="/transactions" className="btn">
+              View Source Records
+            </Link>
+            <Link href="/data-quality" className="btn">
+              View Quality Checks
+            </Link>
           </div>
         </div>
       </div>
@@ -1981,12 +2435,13 @@ function LineageNode({
       onClick={() => onSelect(modelId)}
     >
       {model.label}
+      <div className="lineage-node-label">{model.description}</div>
     </button>
   );
 }
 
 function Connector() {
-  return <div className="pipeline-connector">|</div>;
+  return <div className="pipeline-connector">│</div>;
 }
 
 ==================== C:\Users\Jatin\Desktop\finsight\app\pipeline\page.tsx ====================
@@ -2003,6 +2458,7 @@ interface PipelineStep {
   rows_in?: number;
   rows_out?: number;
   duration_seconds?: number;
+  timing_label?: string;
   model?: string;
   input?: string;
   output?: string;
@@ -2157,8 +2613,11 @@ export default function PipelinePage() {
               <span className="label">Execution</span>
               <span className="value">
                 {selected.duration_seconds
-                  ? `${selected.duration_seconds.toFixed(2)} seconds`
+                  ? `${selected.duration_seconds.toFixed(2)}s`
                   : selected.time || "-"}
+                {selected.timing_label === "simulated" && (
+                  <span style={{ color: "var(--muted)", fontWeight: 400, fontSize: 11 }}> (simulated)</span>
+                )}
               </span>
             </div>
 
@@ -2195,6 +2654,8 @@ import { useState } from "react";
 type Challenge = {
   id: string;
   title: string;
+  description: string;
+  difficulty: string;
   concepts: string[];
   sql: string;
   rows: Record<string, string>[];
@@ -2202,9 +2663,27 @@ type Challenge = {
 
 const challenges: Challenge[] = [
   {
+    id: "total-spending",
+    title: "Find total spending",
+    description: "Calculate the total amount spent across all completed transactions.",
+    difficulty: "Basic",
+    concepts: ["aggregation", "filtering"],
+    sql: `SELECT
+  SUM(amount) AS total_spending,
+  COUNT(*) AS transaction_count
+FROM transactions
+WHERE status = 'completed'
+  AND amount > 0;`,
+    rows: [
+      { total_spending: "42.8Cr", transaction_count: "85,210" },
+    ],
+  },
+  {
     id: "top-merchants",
     title: "Top 5 merchants",
-    concepts: ["aggregation", "joins", "sorting"],
+    description: "Find the highest-spending merchants with their transaction counts.",
+    difficulty: "Basic",
+    concepts: ["aggregation", "JOIN", "ORDER BY", "LIMIT"],
     sql: `SELECT
   COALESCE(m.normalized_name, t.description, 'Unknown') AS merchant,
   COUNT(*) AS transactions,
@@ -2223,9 +2702,55 @@ LIMIT 5;`,
     ],
   },
   {
+    id: "monthly-spending",
+    title: "Monthly spending trend",
+    description: "Calculate spending grouped by month to see trends over time.",
+    difficulty: "Basic",
+    concepts: ["DATE_TRUNC", "GROUP BY", "aggregation"],
+    sql: `SELECT
+  DATE_TRUNC('month', transaction_date) AS month,
+  SUM(amount) AS spending,
+  COUNT(*) AS transactions
+FROM transactions
+WHERE status = 'completed'
+  AND amount > 0
+GROUP BY month
+ORDER BY month;`,
+    rows: [
+      { month: "2026-04", spending: "42.0L", transactions: "4,820" },
+      { month: "2026-05", spending: "48.0L", transactions: "5,110" },
+      { month: "2026-06", spending: "51.0L", transactions: "5,340" },
+    ],
+  },
+  {
+    id: "dedupe",
+    title: "Detect duplicates",
+    description: "Find duplicate transaction groups using GROUP BY and HAVING.",
+    difficulty: "Intermediate",
+    concepts: ["GROUP BY", "HAVING", "duplicate detection"],
+    sql: `SELECT
+  account_id,
+  merchant_id,
+  transaction_date,
+  amount,
+  currency,
+  COUNT(*) AS duplicate_count
+FROM transactions
+GROUP BY account_id, merchant_id, transaction_date, amount, currency
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;`,
+    rows: [
+      { account_id: "12", merchant_id: "45", amount: "1200.00", duplicate_count: "3" },
+      { account_id: "7", merchant_id: "23", amount: "899.00", duplicate_count: "2" },
+      { account_id: "34", merchant_id: "12", amount: "450.00", duplicate_count: "2" },
+    ],
+  },
+  {
     id: "mom-growth",
     title: "Month-over-month growth",
-    concepts: ["CTEs", "date grouping", "window functions"],
+    description: "Calculate the percentage change in spending between consecutive months.",
+    difficulty: "Intermediate",
+    concepts: ["CTE", "LAG", "window function"],
     sql: `WITH monthly_spend AS (
   SELECT
     DATE_TRUNC('month', transaction_date) AS month,
@@ -2250,42 +2775,55 @@ SELECT
 FROM with_previous
 ORDER BY month;`,
     rows: [
-      { month: "2026-04", spending: "42.0L", previous: "39.8L", growth: "5.5%" },
-      { month: "2026-05", spending: "48.0L", previous: "42.0L", growth: "14.2%" },
-      { month: "2026-06", spending: "51.0L", previous: "48.0L", growth: "6.2%" },
+      { month: "2026-04", spending: "42.0L", previous: "39.8L", growth_percent: "5.5%" },
+      { month: "2026-05", spending: "48.0L", previous: "42.0L", growth_percent: "14.2%" },
+      { month: "2026-06", spending: "51.0L", previous: "48.0L", growth_percent: "6.2%" },
     ],
   },
   {
-    id: "dedupe",
-    title: "Deduplicate transactions",
-    concepts: ["window functions", "partitioning", "quality checks"],
-    sql: `WITH ranked AS (
+    id: "merchant-growth",
+    title: "Merchant growth analysis",
+    description: "Compare each merchant's recent vs. earlier spending to find growing merchants.",
+    difficulty: "Advanced",
+    concepts: ["CTE", "CASE WHEN", "window function", "comparative analysis"],
+    sql: `WITH merchant_monthly AS (
   SELECT
-    transaction_id,
-    account_id,
-    merchant_id,
-    transaction_date,
-    amount,
-    currency,
-    ROW_NUMBER() OVER (
-      PARTITION BY account_id, merchant_id, transaction_date, amount, currency
-      ORDER BY transaction_id
-    ) AS duplicate_rank
-  FROM transactions
+    COALESCE(m.normalized_name, 'Unknown') AS merchant,
+    DATE_TRUNC('month', t.transaction_date) AS month,
+    SUM(t.amount) AS spending
+  FROM transactions t
+  LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+  WHERE t.status = 'completed' AND t.amount > 0
+  GROUP BY merchant, month
+),
+merchant_trend AS (
+  SELECT
+    merchant,
+    SUM(CASE WHEN month >= CURRENT_DATE - interval '3 months' THEN spending ELSE 0 END) AS recent,
+    SUM(CASE WHEN month < CURRENT_DATE - interval '3 months' THEN spending ELSE 0 END) AS earlier
+  FROM merchant_monthly
+  GROUP BY merchant
 )
-SELECT *
-FROM ranked
-WHERE duplicate_rank = 1;`,
+SELECT
+  merchant,
+  recent,
+  earlier,
+  ROUND(((recent - earlier) / NULLIF(earlier, 0)) * 100, 1) AS growth_pct
+FROM merchant_trend
+WHERE earlier > 0
+ORDER BY growth_pct DESC
+LIMIT 10;`,
     rows: [
-      { transaction_id: "18423", merchant_id: "12", amount: "1200.00", duplicate_rank: "1" },
-      { transaction_id: "19231", merchant_id: "12", amount: "1200.00", duplicate_rank: "1" },
-      { transaction_id: "20489", merchant_id: "44", amount: "899.00", duplicate_rank: "1" },
+      { merchant: "Blinkit", recent: "8.2L", earlier: "4.1L", growth_pct: "100.0%" },
+      { merchant: "Swiggy", recent: "12.4L", earlier: "9.8L", growth_pct: "26.5%" },
     ],
   },
   {
     id: "rolling",
     title: "30-day rolling spending",
-    concepts: ["window functions", "time series", "analytics"],
+    description: "Calculate a rolling 30-day spending window for trend analysis.",
+    difficulty: "Advanced",
+    concepts: ["window function", "ROWS BETWEEN", "time series"],
     sql: `WITH daily AS (
   SELECT
     transaction_date,
@@ -2310,18 +2848,60 @@ ORDER BY transaction_date;`,
       { transaction_date: "2026-06-03", daily_spending: "1.2L", rolling_30_day: "39.6L" },
     ],
   },
+  {
+    id: "anomalies",
+    title: "Spending anomalies",
+    description: "Detect days with unusually high spending using standard deviation.",
+    difficulty: "Advanced",
+    concepts: ["window function", "AVG", "STDDEV", "anomaly detection"],
+    sql: `WITH daily_spend AS (
+  SELECT
+    transaction_date,
+    SUM(amount) AS daily_total
+  FROM transactions
+  WHERE status = 'completed' AND amount > 0
+  GROUP BY transaction_date
+),
+stats AS (
+  SELECT
+    transaction_date,
+    daily_total,
+    AVG(daily_total) OVER (
+      ORDER BY transaction_date
+      ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+    ) AS rolling_avg,
+    STDDEV(daily_total) OVER (
+      ORDER BY transaction_date
+      ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+    ) AS rolling_stddev
+  FROM daily_spend
+)
+SELECT
+  transaction_date,
+  daily_total,
+  ROUND(rolling_avg::numeric, 0) AS avg,
+  ROUND((daily_total - rolling_avg) / NULLIF(rolling_stddev, 0), 2) AS z_score
+FROM stats
+WHERE (daily_total - rolling_avg) / NULLIF(rolling_stddev, 0) > 2
+ORDER BY z_score DESC
+LIMIT 10;`,
+    rows: [
+      { transaction_date: "2026-03-15", daily_total: "4.8L", avg: "1.5L", z_score: "3.2" },
+      { transaction_date: "2026-07-22", daily_total: "3.9L", avg: "1.6L", z_score: "2.8" },
+    ],
+  },
 ];
 
 export default function SqlLabPage() {
-  const [selectedId, setSelectedId] = useState(challenges[1].id);
+  const [selectedId, setSelectedId] = useState(challenges[0].id);
   const [ran, setRan] = useState(false);
-  const selected = challenges.find((challenge) => challenge.id === selectedId) || challenges[0];
+  const selected = challenges.find((c) => c.id === selectedId) || challenges[0];
 
   return (
     <div>
       <h1 className="page-title">SQL Lab</h1>
       <p className="page-subtitle">
-        Choose a predefined analytics challenge and inspect the SQL pattern.
+        Choose a data challenge, inspect the SQL pattern, and see the results.
       </p>
 
       <div className="detail-grid">
@@ -2349,14 +2929,20 @@ export default function SqlLabPage() {
                 }}
               >
                 <span>{challenge.title}</span>
-                <span className="badge info">{challenge.concepts[0]}</span>
+                <span className={`badge ${challenge.difficulty === "Basic" ? "pass" : challenge.difficulty === "Intermediate" ? "warn" : "fail"}`} style={{ fontSize: 10 }}>
+                  {challenge.difficulty}
+                </span>
               </button>
             ))}
           </div>
         </div>
 
         <div className="detail-panel">
-          <div className="card-title">{selected.title}</div>
+          <h2 style={{ fontSize: 16, margin: "0 0 6px" }}>{selected.title}</h2>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14, lineHeight: 1.5 }}>
+            {selected.description}
+          </p>
+
           <div className="tech-list" style={{ marginBottom: 16 }}>
             {selected.concepts.map((concept) => (
               <span className="tech-pill" key={concept}>
@@ -2364,7 +2950,9 @@ export default function SqlLabPage() {
               </span>
             ))}
           </div>
+
           <div className="sql-block">{selected.sql}</div>
+
           <button
             className="btn btn-primary"
             style={{ marginTop: 16 }}
@@ -2374,29 +2962,43 @@ export default function SqlLabPage() {
           </button>
 
           {ran && (
-            <div className="modal-surface">
-              <div className="card-title">Result Preview</div>
-              <div className="data-table-mini">
-                <table>
-                  <thead>
-                    <tr>
-                      {Object.keys(selected.rows[0]).map((key) => (
-                        <th key={key}>{key}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selected.rows.map((row, index) => (
-                      <tr key={index}>
-                        {Object.values(row).map((value) => (
-                          <td key={value}>{value}</td>
+            <>
+              <div className="modal-surface">
+                <div className="card-title">Result Preview</div>
+                <div className="data-table-mini">
+                  <table>
+                    <thead>
+                      <tr>
+                        {Object.keys(selected.rows[0]).map((key) => (
+                          <th key={key}>{key}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {selected.rows.map((row, index) => (
+                        <tr key={index}>
+                          {Object.values(row).map((value, vi) => (
+                            <td key={vi}>{value}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+
+              <div style={{ marginTop: 16 }}>
+                <div className="card-title">SQL Concepts Used</div>
+                <div className="step-list">
+                  {selected.concepts.map((concept) => (
+                    <div className="step-row" key={concept}>
+                      <span>{concept}</span>
+                      <span style={{ color: "var(--success)", fontWeight: 600, fontSize: 13 }}>✓</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -2672,147 +3274,221 @@ export default function TransactionsPage() {
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
-const rawRows = [
-  { merchant: "AMAZON", amount: "1200", currency: "INR", date: "09/12/25", status: "Completed" },
-  { merchant: "Amazon.com", amount: "1200", currency: "INR", date: "2025-09-12", status: "completed" },
-  { merchant: "AMZN", amount: "1200", currency: "INR", date: "12-09-2025", status: "COMPLETED" },
-];
-
-const cleanRows = [
+const rawExamples = [
   {
-    merchant: "Amazon",
-    amount: "1200.00",
+    merchant: "AMZN",
+    currency: "inr",
+    status: "COMPLETED",
+    category: "NULL",
+    date: "12/03/26",
+  },
+  {
+    merchant: "Amazon.com",
     currency: "INR",
-    transaction_date: "2025-09-12",
     status: "completed",
+    category: "NULL",
+    date: "2026-03-12",
+  },
+  {
+    merchant: "amazon india",
+    currency: "Inr",
+    status: "Completed",
+    category: "NULL",
+    date: "03-12-2026",
   },
 ];
 
-const transformations = [
-  "Merchant normalization",
-  "Timestamp normalization",
-  "Currency validation",
-  "Duplicate detection",
-  "Status normalization",
+const cleanExample = {
+  merchant: "Amazon",
+  currency: "INR",
+  status: "completed",
+  category: "Shopping",
+  date: "2026-03-12",
+};
+
+const transformSteps = [
+  "UPPER(currency)",
+  "LOWER(status)",
+  "Merchant normalization via JOIN",
+  "Date parsing to YYYY-MM-DD",
+  "Category lookup via merchants → categories",
+  "Duplicate detection via ROW_NUMBER()",
 ];
 
-const sql = `WITH normalized AS (
-  SELECT
-    COALESCE(m.normalized_name, t.description) AS merchant,
-    t.amount,
-    UPPER(t.currency) AS currency,
-    t.transaction_date,
-    LOWER(t.status) AS status
-  FROM raw.transactions t
-  LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
-),
-deduped AS (
+const stagingSql = `-- stg_transactions: normalize raw fields
+SELECT
+  transaction_id,
+  account_id,
+  merchant_id,
+  transaction_date,
+  amount,
+  UPPER(currency) AS currency,
+  LOWER(status) AS status,
+  LOWER(transaction_type) AS transaction_type
+FROM raw.transactions
+WHERE transaction_date IS NOT NULL
+  AND amount IS NOT NULL;`;
+
+const cleanSql = `-- int_clean_transactions: join and enrich
+SELECT
+  t.*,
+  COALESCE(m.normalized_name, t.description, 'Unknown') AS merchant,
+  COALESCE(c.category_name, 'Uncategorized') AS category
+FROM stg_transactions t
+LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+LEFT JOIN categories c ON m.category_id = c.category_id
+WHERE t.currency IN ('INR', 'USD', 'EUR', 'GBP')
+  AND t.status IN ('completed', 'pending', 'failed', 'refunded');`;
+
+const dedupeSql = `-- Deduplication via window function
+WITH ranked AS (
   SELECT *,
-         ROW_NUMBER() OVER (
-           PARTITION BY merchant, amount, currency, transaction_date
-           ORDER BY transaction_date
-         ) AS row_number
-  FROM normalized
+    ROW_NUMBER() OVER (
+      PARTITION BY account_id, merchant_id,
+                   transaction_date, amount, currency
+      ORDER BY transaction_id
+    ) AS duplicate_rank
+  FROM stg_transactions
 )
-SELECT merchant, amount, currency, transaction_date, status
-FROM deduped
-WHERE row_number = 1
-  AND currency IN ('INR', 'USD', 'EUR', 'GBP')
-  AND status IN ('completed', 'pending', 'failed', 'refunded');`;
+SELECT * FROM ranked WHERE duplicate_rank = 1;`;
 
 export default function TransformationsPage() {
-  const [showSql, setShowSql] = useState(false);
+  const [selectedRaw, setSelectedRaw] = useState(0);
+  const [showSql, setShowSql] = useState<string | null>(null);
 
   return (
     <div>
       <h1 className="page-title">Transformations</h1>
       <p className="page-subtitle">
-        Before and after records showing how raw exports become modeled analytics data.
+        Watch a single raw record become a clean, modeled transaction through
+        SQL transformations.
       </p>
 
       <div className="split-workbench">
-        <div>
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div className="card-title">Raw Data</div>
-            <div className="data-table-mini">
-              <table>
-                <thead>
-                  <tr>
-                    {Object.keys(rawRows[0]).map((key) => (
-                      <th key={key}>{key}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rawRows.map((row) => (
-                    <tr key={`${row.merchant}-${row.date}`}>
-                      {Object.values(row).map((value) => (
-                        <td key={value}>{value}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Left: transformation showcase */}
+        <div className="transform-showcase">
+          {/* Raw record */}
+          <div className="transform-record">
+            <div className="transform-record-title">Raw Transaction</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {rawExamples.map((_, i) => (
+                <button
+                  key={i}
+                  className="btn"
+                  onClick={() => setSelectedRaw(i)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    background:
+                      selectedRaw === i ? "var(--foreground)" : undefined,
+                    color:
+                      selectedRaw === i ? "var(--background)" : undefined,
+                    borderColor:
+                      selectedRaw === i ? "var(--foreground)" : undefined,
+                  }}
+                >
+                  Variant {i + 1}
+                </button>
+              ))}
             </div>
-          </div>
-
-          <div className="transform-arrow">
-            |<br />
-            dbt transformation
-            <br />v
-          </div>
-
-          <div className="card">
-            <div className="card-title">Clean Model</div>
-            <div className="data-table-mini">
-              <table>
-                <thead>
-                  <tr>
-                    {Object.keys(cleanRows[0]).map((key) => (
-                      <th key={key}>{key}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {cleanRows.map((row) => (
-                    <tr key={row.transaction_date}>
-                      {Object.values(row).map((value) => (
-                        <td key={value}>{value}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <div className="detail-panel">
-          <div className="card-title">Transformations</div>
-          <div className="step-list">
-            {transformations.map((item) => (
-              <div className="step-row" key={item}>
-                <span>{item}</span>
-                <span className="badge pass">PASS</span>
+            {Object.entries(rawExamples[selectedRaw]).map(([key, val]) => (
+              <div className="transform-field" key={key}>
+                <span className="transform-field-name">{key}</span>
+                <span className={`transform-field-value${val === "NULL" || val === "inr" || val === "Inr" || val === "COMPLETED" || val === "Completed" || val === "AMZN" || val === "amazon india" || val === "Amazon.com" || val === "12/03/26" || val === "03-12-2026" ? " dirty" : ""}`}>
+                  {val}
+                </span>
               </div>
             ))}
           </div>
 
-          <button
-            className="btn"
-            style={{ marginTop: 18 }}
-            onClick={() => setShowSql((value) => !value)}
-          >
-            {showSql ? "Hide SQL" : "View SQL"}
-          </button>
+          {/* Arrow */}
+          <div className="transform-center-arrow">↓</div>
+
+          {/* SQL steps */}
+          <div className="transform-sql-list">
+            <div className="transform-record-title" style={{ marginBottom: 8 }}>
+              SQL Transformation
+            </div>
+            {transformSteps.map((step) => (
+              <div className="transform-sql-item" key={step}>
+                {step}
+              </div>
+            ))}
+          </div>
+
+          {/* Arrow */}
+          <div className="transform-center-arrow">↓</div>
+
+          {/* Clean record */}
+          <div className="transform-record" style={{ borderColor: "var(--success)" }}>
+            <div className="transform-record-title" style={{ color: "var(--success)" }}>
+              Modeled Transaction
+            </div>
+            {Object.entries(cleanExample).map(([key, val]) => (
+              <div className="transform-field" key={key}>
+                <span className="transform-field-name">{key}</span>
+                <span className="transform-field-value clean">{val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: detail panel */}
+        <div className="detail-panel">
+          <div className="card-title">SQL Models</div>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14, lineHeight: 1.6 }}>
+            Three SQL models transform raw bank exports into clean, deduplicated,
+            categorized transactions.
+          </p>
+
+          <div className="step-list">
+            <button
+              className="step-row"
+              onClick={() => setShowSql(showSql === "staging" ? null : "staging")}
+              style={{ cursor: "pointer", background: "none", border: 0, borderBottom: "1px solid var(--border)", fontFamily: "inherit", textAlign: "left", width: "100%" }}
+            >
+              <span>stg_transactions</span>
+              <span className="badge pass">STAGING</span>
+            </button>
+            <button
+              className="step-row"
+              onClick={() => setShowSql(showSql === "clean" ? null : "clean")}
+              style={{ cursor: "pointer", background: "none", border: 0, borderBottom: "1px solid var(--border)", fontFamily: "inherit", textAlign: "left", width: "100%" }}
+            >
+              <span>int_clean_transactions</span>
+              <span className="badge pass">INTERMEDIATE</span>
+            </button>
+            <button
+              className="step-row"
+              onClick={() => setShowSql(showSql === "dedupe" ? null : "dedupe")}
+              style={{ cursor: "pointer", background: "none", border: 0, fontFamily: "inherit", textAlign: "left", width: "100%" }}
+            >
+              <span>deduplication</span>
+              <span className="badge pass">QUALITY</span>
+            </button>
+          </div>
 
           {showSql && (
             <div className="modal-surface">
-              <div className="card-title">stg_transactions.sql</div>
-              <div className="sql-block">{sql}</div>
+              <div className="card-title">
+                {showSql === "staging" ? "stg_transactions.sql" : showSql === "clean" ? "int_clean_transactions.sql" : "deduplication.sql"}
+              </div>
+              <div className="sql-block">
+                {showSql === "staging" ? stagingSql : showSql === "clean" ? cleanSql : dedupeSql}
+              </div>
             </div>
           )}
+
+          <div style={{ marginTop: 18 }}>
+            <Link href="/lineage" className="btn" style={{ marginRight: 8 }}>
+              View Lineage
+            </Link>
+            <Link href="/data-quality" className="btn">
+              View Quality Checks
+            </Link>
+          </div>
         </div>
       </div>
     </div>
@@ -2836,9 +3512,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FinSight - Personal Finance Analytics",
+  title: "FinSight — Data Engineering Portfolio",
   description:
-    "Personal finance analytics platform with data engineering pipeline, SQL analytics, and AI-powered insights.",
+    "A data engineering portfolio project: 100K messy transactions → SQL transformation → lineage tracking → traceable analytics. Built with PostgreSQL, dbt-style SQL, Python, FastAPI, and Next.js.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -2857,24 +3533,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
 ==================== C:\Users\Jatin\Desktop\finsight\app\page.tsx ====================
 import Link from "next/link";
 
-const stages = ["Upload", "Clean", "Transform", "Validate", "Analyze"];
-const flow = [
-  {
-    title: "Ingest",
-    body: "Python parses CSV exports, detects columns, and loads canonical records into PostgreSQL.",
-  },
-  {
-    title: "Transform",
-    body: "SQL models normalize merchants, timestamps, statuses, currencies, and transaction shape.",
-  },
-  {
-    title: "Validate",
-    body: "Quality checks surface duplicates, missing categories, invalid currencies, and broken records.",
-  },
-  {
-    title: "Analyze",
-    body: "Dashboard metrics, AI answers, and SQL lab results trace back to the modeled data.",
-  },
+const pipelineFlow = [
+  "Messy Data",
+  "Inspect",
+  "Pipeline",
+  "SQL Transforms",
+  "Quality Checks",
+  "Lineage",
+  "Analytics",
 ];
 
 const tech = [
@@ -2893,29 +3559,32 @@ export default function Home() {
       <section className="hero-shell">
         <div className="hero-inner">
           <div className="hero-brand">FinSight</div>
-          <h1 className="hero-title">From messy financial data to trusted insights</h1>
+          <h1 className="hero-title">
+            Messy data → trusted data → explainable insights
+          </h1>
           <p className="hero-copy">
-            Turn inconsistent bank exports, merchant variations, duplicate rows,
-            and validation failures into traceable analytics that explain where
-            every number came from.
+            A data engineering portfolio project. Load 100K messy financial
+            transactions, run SQL transformations, trace lineage, investigate
+            anomalies, break the pipeline, and fix it — all with real
+            PostgreSQL queries.
           </p>
           <div className="hero-actions">
             <Link href="/add-data" className="btn btn-primary">
-              Try Demo Data
+              Try Demo Dataset
             </Link>
             <Link href="/add-data/upload" className="btn">
               Upload CSV
             </Link>
-            <Link href="/pipeline" className="btn">
-              Explore Pipeline
+            <Link href="/break-pipeline" className="btn">
+              Break the Pipeline
             </Link>
           </div>
-          <div className="pipeline-strip" aria-label="FinSight workflow">
-            {stages.map((stage, index) => (
+          <div className="pipeline-strip" aria-label="FinSight pipeline">
+            {pipelineFlow.map((stage, index) => (
               <span key={stage} style={{ display: "contents" }}>
                 <span className="pipeline-chip">{stage}</span>
-                {index < stages.length - 1 && (
-                  <span className="pipeline-arrow">-&gt;</span>
+                {index < pipelineFlow.length - 1 && (
+                  <span className="pipeline-arrow">→</span>
                 )}
               </span>
             ))}
@@ -2923,18 +3592,79 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── Dataset Stats ── */}
       <section className="landing-section">
-        <div className="section-heading">How It Works</div>
-        <div className="flow-grid">
-          {flow.map((item) => (
-            <div className="flow-card" key={item.title}>
-              <h3>{item.title}</h3>
-              <p>{item.body}</p>
+        <div className="section-heading">Demo Dataset</div>
+        <div className="dataset-hero">
+          <div className="dataset-stats">
+            <div className="dataset-stat">
+              <div className="dataset-stat-value">100,000</div>
+              <div className="dataset-stat-label">transactions</div>
             </div>
-          ))}
+            <div className="dataset-stat">
+              <div className="dataset-stat-value">50</div>
+              <div className="dataset-stat-label">users</div>
+            </div>
+            <div className="dataset-stat">
+              <div className="dataset-stat-value">80</div>
+              <div className="dataset-stat-label">accounts</div>
+            </div>
+            <div className="dataset-stat">
+              <div className="dataset-stat-value">20</div>
+              <div className="dataset-stat-label">months</div>
+            </div>
+            <div className="dataset-stat">
+              <div className="dataset-stat-value">4</div>
+              <div className="dataset-stat-label">valid currencies</div>
+            </div>
+            <div className="dataset-stat">
+              <div className="dataset-stat-value" style={{ color: "var(--danger)" }}>3</div>
+              <div className="dataset-stat-label">invalid codes</div>
+            </div>
+          </div>
+          <div className="dataset-problem">
+            <div className="dataset-problem-title">
+              But there&rsquo;s a problem&hellip;
+            </div>
+            <div className="dataset-problem-body">
+              This dataset contains <strong>deliberately broken records</strong>.
+              <br />
+              Duplicate transactions, missing merchants, invalid currencies,
+              inconsistent date formats, and messy merchant names.
+            </div>
+            <div>
+              <Link href="/add-data" className="btn btn-primary">
+                Load Data &amp; Investigate →
+              </Link>
+            </div>
+          </div>
         </div>
       </section>
 
+      {/* ── What You Can Do ── */}
+      <section className="landing-section" style={{ paddingTop: 0 }}>
+        <div className="section-heading">What You Can Do</div>
+        <div className="flow-grid">
+          <Link href="/pipeline" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Run the Pipeline</h3>
+            <p>Watch 100K rows flow through ingestion, staging, transformation, quality checks, and analytics.</p>
+          </Link>
+          <Link href="/break-pipeline" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Break It</h3>
+            <p>Inject duplicates, invalid currencies, or missing categories — then watch the quality step fail.</p>
+          </Link>
+          <Link href="/data-quality" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Investigate</h3>
+            <p>Click failed checks, read the SQL, inspect affected records, and trace the root cause.</p>
+          </Link>
+          <Link href="/lineage" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Trace Lineage</h3>
+            <p>Follow any dashboard number back through the SQL DAG to raw source data.</p>
+          </Link>
+        </div>
+      </section>
+
+      {/* ── Tech ── */}
       <section className="landing-section" style={{ paddingTop: 0 }}>
         <div className="section-heading">Built With</div>
         <div className="tech-list">

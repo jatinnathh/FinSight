@@ -1,13 +1,13 @@
 import Link from "next/link";
 
-const journeySteps = [
-  { step: 1, title: "Add Data", desc: "Load 100K messy transactions", href: "/add-data" },
-  { step: 2, title: "Inspect", desc: "See raw dirty records", href: "/transactions" },
-  { step: 3, title: "Validate", desc: "Run SQL quality checks", href: "/data-quality" },
-  { step: 4, title: "Transform", desc: "Clean it with SQL models", href: "/transformations" },
-  { step: 5, title: "Trace", desc: "Follow data through lineage", href: "/lineage" },
-  { step: 6, title: "Analyze", desc: "View traceable dashboard", href: "/dashboard" },
-  { step: 7, title: "Investigate", desc: "Diagnose anomalies", href: "/data-detective" },
+const pipelineFlow = [
+  "Messy Data",
+  "Inspect",
+  "Pipeline",
+  "SQL Transforms",
+  "Quality Checks",
+  "Lineage",
+  "Analytics",
 ];
 
 const tech = [
@@ -27,28 +27,39 @@ export default function Home() {
         <div className="hero-inner">
           <div className="hero-brand">FinSight</div>
           <h1 className="hero-title">
-            From messy financial data to trusted insights
+            Messy data → trusted data → explainable insights
           </h1>
           <p className="hero-copy">
-            &ldquo;I have messy financial data. Can FinSight make it trustworthy?&rdquo;
-            <br />
-            <br />
-            Follow a guided journey through ingestion, validation, SQL
-            transformation, lineage tracking, and analytics — then break the
-            pipeline and fix it.
+            A data engineering portfolio project. Load 100K messy financial
+            transactions, run SQL transformations, trace lineage, investigate
+            anomalies, break the pipeline, and fix it — all with real
+            PostgreSQL queries.
           </p>
           <div className="hero-actions">
             <Link href="/add-data" className="btn btn-primary">
-              Start Data Investigation →
+              Try Demo Dataset
             </Link>
             <Link href="/add-data/upload" className="btn">
               Upload CSV
             </Link>
+            <Link href="/break-pipeline" className="btn">
+              Break the Pipeline
+            </Link>
+          </div>
+          <div className="pipeline-strip" aria-label="FinSight pipeline">
+            {pipelineFlow.map((stage, index) => (
+              <span key={stage} style={{ display: "contents" }}>
+                <span className="pipeline-chip">{stage}</span>
+                {index < pipelineFlow.length - 1 && (
+                  <span className="pipeline-arrow">→</span>
+                )}
+              </span>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* ── Dataset Hero ── */}
+      {/* ── Dataset Stats ── */}
       <section className="landing-section">
         <div className="section-heading">Demo Dataset</div>
         <div className="dataset-hero">
@@ -75,7 +86,7 @@ export default function Home() {
             </div>
             <div className="dataset-stat">
               <div className="dataset-stat-value" style={{ color: "var(--danger)" }}>3</div>
-              <div className="dataset-stat-label">invalid currency codes</div>
+              <div className="dataset-stat-label">invalid codes</div>
             </div>
           </div>
           <div className="dataset-problem">
@@ -83,37 +94,40 @@ export default function Home() {
               But there&rsquo;s a problem&hellip;
             </div>
             <div className="dataset-problem-body">
-              This dataset contains <strong>deliberately broken records</strong>.<br />
+              This dataset contains <strong>deliberately broken records</strong>.
+              <br />
               Duplicate transactions, missing merchants, invalid currencies,
               inconsistent date formats, and messy merchant names.
             </div>
             <div>
               <Link href="/add-data" className="btn btn-primary">
-                Start Data Investigation →
+                Load Data &amp; Investigate →
               </Link>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ── Journey Steps ── */}
+      {/* ── What You Can Do ── */}
       <section className="landing-section" style={{ paddingTop: 0 }}>
-        <div className="section-heading">The Journey</div>
-        <div className="journey-steps">
-          {journeySteps.map((s, i) => (
-            <div key={s.step}>
-              <Link href={s.href} className="journey-step" style={{ textDecoration: "none", color: "inherit" }}>
-                <div className="journey-step-num">{s.step}</div>
-                <div className="journey-step-content">
-                  <div className="journey-step-title">{s.title}</div>
-                  <div className="journey-step-desc">{s.desc}</div>
-                </div>
-              </Link>
-              {i < journeySteps.length - 1 && (
-                <div className="journey-connector" />
-              )}
-            </div>
-          ))}
+        <div className="section-heading">What You Can Do</div>
+        <div className="flow-grid">
+          <Link href="/pipeline" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Run the Pipeline</h3>
+            <p>Watch 100K rows flow through ingestion, staging, transformation, quality checks, and analytics.</p>
+          </Link>
+          <Link href="/break-pipeline" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Break It</h3>
+            <p>Inject duplicates, invalid currencies, or missing categories — then watch the quality step fail.</p>
+          </Link>
+          <Link href="/data-quality" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Investigate</h3>
+            <p>Click failed checks, read the SQL, inspect affected records, and trace the root cause.</p>
+          </Link>
+          <Link href="/lineage" className="flow-card" style={{ textDecoration: "none", color: "inherit" }}>
+            <h3>Trace Lineage</h3>
+            <p>Follow any dashboard number back through the SQL DAG to raw source data.</p>
+          </Link>
         </div>
       </section>
 

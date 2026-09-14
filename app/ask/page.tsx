@@ -20,10 +20,21 @@ interface AskResult {
   };
 }
 
+const PIPELINE_STEPS = [
+  "Question",
+  "LLM",
+  "Generated SQL",
+  "Validation",
+  "PostgreSQL",
+  "Result",
+  "Answer",
+];
+
 export default function AskPage() {
   const [question, setQuestion] = useState("");
   const [result, setResult] = useState<AskResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeStep, setActiveStep] = useState(-1);
   const [history, setHistory] = useState<{ q: string; r: AskResult }[]>([]);
   const [showSql, setShowSql] = useState(true);
 
@@ -31,6 +42,13 @@ export default function AskPage() {
     if (!question.trim()) return;
     setLoading(true);
     setResult(null);
+    setActiveStep(0);
+
+    // Animate pipeline steps
+    for (let i = 0; i <= 6; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      setActiveStep(i);
+    }
 
     try {
       const res = await fetch("/api/v1/ask", {
@@ -40,6 +58,7 @@ export default function AskPage() {
       });
       const data: AskResult = await res.json();
       setResult(data);
+      setActiveStep(6);
       if (data.success) {
         setHistory((h) => [{ q: question, r: data }, ...h]);
       }
@@ -53,7 +72,8 @@ export default function AskPage() {
     <div className="chat-container">
       <h1 className="page-title">Ask FinSight</h1>
       <p className="page-subtitle">
-        Ask a finance question and inspect the SQL guardrail path behind the answer.
+        Ask a finance question. See the full pipeline: LLM → SQL → Validation →
+        PostgreSQL → Answer.
       </p>
 
       <div className="chat-input-row">
@@ -73,6 +93,27 @@ export default function AskPage() {
         </button>
       </div>
 
+      {/* Pipeline flow visualization */}
+      {activeStep >= 0 && (
+        <div className="ask-pipeline">
+          {PIPELINE_STEPS.map((step, i) => (
+            <span key={step} style={{ display: "contents" }}>
+              <span
+                className={`ask-pipeline-step${
+                  i < activeStep ? " done" : i === activeStep ? " active" : ""
+                }`}
+              >
+                {i < activeStep ? "✓ " : ""}
+                {step}
+              </span>
+              {i < PIPELINE_STEPS.length - 1 && (
+                <span className="ask-pipeline-arrow">→</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
       {result && (
         <div className="chat-result">
           <div className="chat-section">
@@ -85,18 +126,6 @@ export default function AskPage() {
           {result.success ? (
             <>
               <div className="chat-section">
-                <div className="chat-section-title">Understanding</div>
-                <div className="step-list">
-                  {inferUnderstanding(result.question || question).map((item) => (
-                    <div className="step-row" key={item}>
-                      <span>{item}</span>
-                      <span className="badge pass">OK</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="chat-section">
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
                   <div className="chat-section-title">Generated SQL</div>
                   <button className="metric-link" onClick={() => setShowSql((v) => !v)}>
@@ -107,30 +136,30 @@ export default function AskPage() {
               </div>
 
               <div className="chat-section">
-                <div className="chat-section-title">Validation</div>
+                <div className="chat-section-title">SQL Validation</div>
                 <div className="step-list">
                   <div className="step-row">
                     <span>Read-only SELECT or WITH query</span>
-                    <span className="badge pass">
-                      {result.validation?.read_only ? "PASS" : "FAIL"}
+                    <span style={{ color: result.validation?.read_only ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                      {result.validation?.read_only ? "✓ PASS" : "✗ FAIL"}
                     </span>
                   </div>
                   <div className="step-row">
                     <span>Valid tables</span>
-                    <span className="badge pass">
-                      {result.validation?.valid_tables ? "PASS" : "FAIL"}
+                    <span style={{ color: result.validation?.valid_tables ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                      {result.validation?.valid_tables ? "✓ PASS" : "✗ FAIL"}
                     </span>
                   </div>
                   <div className="step-row">
                     <span>Valid columns</span>
-                    <span className="badge pass">
-                      {result.validation?.valid_columns ? "PASS" : "FAIL"}
+                    <span style={{ color: result.validation?.valid_columns ? "var(--success)" : "var(--danger)", fontWeight: 600 }}>
+                      {result.validation?.valid_columns ? "✓ PASS" : "✗ FAIL"}
                     </span>
                   </div>
                   <div className="step-row">
                     <span>Query cost acceptable</span>
-                    <span className="badge pass">
-                      {result.validation?.query_cost?.toUpperCase() || "PASS"}
+                    <span style={{ color: "var(--success)", fontWeight: 600 }}>
+                      ✓ {result.validation?.query_cost?.toUpperCase() || "PASS"}
                     </span>
                   </div>
                 </div>
@@ -139,11 +168,11 @@ export default function AskPage() {
               {result.results && result.results.length > 0 && (
                 <div className="chat-section">
                   <div className="chat-section-title">
-                    Result ({result.total_rows} rows)
+                    PostgreSQL Result ({result.total_rows} rows)
                   </div>
                   <div
-                    className="table-container"
-                    style={{ border: "none", maxHeight: 300, overflow: "auto" }}
+                    className="data-table-mini"
+                    style={{ maxHeight: 300, overflow: "auto" }}
                   >
                     <table>
                       <thead>
@@ -158,7 +187,7 @@ export default function AskPage() {
                           <tr key={i}>
                             {Object.values(row).map((val, j) => (
                               <td key={j} style={{ fontSize: 12 }}>
-                                {val === null ? "-" : String(val)}
+                                {val === null ? "—" : String(val)}
                               </td>
                             ))}
                           </tr>
@@ -170,14 +199,14 @@ export default function AskPage() {
               )}
 
               <div className="chat-section">
-                <div className="chat-section-title">Explanation</div>
+                <div className="chat-section-title">Answer</div>
                 <p style={{ fontSize: 13, margin: 0, lineHeight: 1.6 }}>
                   {result.explanation}
                 </p>
               </div>
 
               <div className="chat-section" style={{ fontSize: 11, color: "var(--muted)" }}>
-                Provider: {result.provider} - Bound parameters:{" "}
+                Provider: {result.provider} · Bound parameters:{" "}
                 {result.validation?.bound_parameters || 0}
               </div>
             </>
@@ -216,21 +245,4 @@ export default function AskPage() {
       )}
     </div>
   );
-}
-
-function inferUnderstanding(question: string): string[] {
-  const lower = question.toLowerCase();
-  const items = ["Identified metric: spending"];
-
-  if (lower.includes("last month") || lower.includes("month")) {
-    items.push("Identified time period: monthly");
-  }
-  if (lower.includes("category") || lower.includes("where") || lower.includes("most")) {
-    items.push("Identified grouping: category or merchant");
-  }
-  if (lower.includes("trend") || lower.includes("over time")) {
-    items.push("Identified trend analysis");
-  }
-
-  return items;
 }

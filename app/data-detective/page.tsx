@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 interface DetectiveData {
   current_month_spending: number;
@@ -16,11 +17,11 @@ interface DetectiveData {
 
 const investigationSteps = [
   "Checking data freshness",
-  "Checking duplicates",
-  "Checking missing merchants",
-  "Checking refunds",
-  "Checking currency conversion",
-  "Comparing merchant distribution",
+  "Checking duplicate records",
+  "Checking merchant distribution",
+  "Checking refund activity",
+  "Checking currency anomalies",
+  "Comparing spending patterns",
 ];
 
 export default function DataDetectivePage() {
@@ -130,38 +131,28 @@ WHERE transaction_type = 'refund';`,
     <div style={{ maxWidth: 860 }}>
       <h1 className="page-title">Data Detective</h1>
       <p className="page-subtitle">
-        Investigate spending changes and data-quality anomalies from the pipeline.
+        Investigate spending changes and trace every conclusion back to evidence.
       </p>
 
-      <div className="card" style={{ marginBottom: 24 }}>
-        <div className="card-title">
-          {hasAnomaly
-            ? `Spending changed ${Math.abs(data.change_percent)}% this month`
-            : "No major spending swing detected"}
+      {/* Alert banner */}
+      <div className="detective-alert">
+        <div className="detective-alert-title">
+          {hasAnomaly ? "Something changed." : "No major spending swing detected"}
         </div>
-        <div style={{ display: "flex", gap: 24, margin: "12px 0", flexWrap: "wrap" }}>
+        <div className="detective-alert-value">
+          Spending {data.change_percent >= 0 ? "↑" : "↓"} {Math.abs(data.change_percent)}%
+        </div>
+        <div style={{ display: "flex", gap: 24, justifyContent: "center", marginBottom: 20 }}>
           <div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>Previous Month</div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                fontFamily: "var(--font-mono), monospace",
-              }}
-            >
-              {data.previous_month_spending.toLocaleString()}
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
+              ₹{data.previous_month_spending.toLocaleString()}
             </div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>Current Month</div>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                fontFamily: "var(--font-mono), monospace",
-              }}
-            >
-              {data.current_month_spending.toLocaleString()}
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
+              ₹{data.current_month_spending.toLocaleString()}
             </div>
           </div>
         </div>
@@ -183,9 +174,13 @@ WHERE transaction_type = 'refund';`,
             {investigationSteps.map((step, index) => (
               <div className="step-row" key={step}>
                 <span>{step}</span>
-                <span className={`badge ${completedSteps > index ? "pass" : "info"}`}>
-                  {completedSteps > index ? "DONE" : investigating ? "..." : "WAIT"}
-                </span>
+                {completedSteps > index ? (
+                  <span style={{ color: "var(--success)", fontWeight: 600 }}>✓</span>
+                ) : investigating ? (
+                  <span style={{ color: "var(--muted)" }}>…</span>
+                ) : (
+                  <span style={{ color: "var(--muted)" }}>·</span>
+                )}
               </div>
             ))}
           </div>
@@ -215,6 +210,17 @@ WHERE transaction_type = 'refund';`,
               <div style={{ marginTop: 18 }}>
                 <div className="card-title">SQL</div>
                 <div className="sql-block">{rootCause.sql}</div>
+              </div>
+              <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Link href="/data-quality" className="btn">
+                  View Records
+                </Link>
+                <Link href="/lineage" className="btn">
+                  View Lineage
+                </Link>
+                <Link href="/pipeline" className="btn">
+                  View Pipeline Run
+                </Link>
               </div>
             </>
           ) : (
