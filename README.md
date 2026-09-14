@@ -480,14 +480,3 @@ finsight/
 
 ---
 
-## License
-
-MIT
-
----
-
-<div align="center">
-
-Built by [Jatin Nath](https://github.com/jatinnathh) as a data engineering portfolio project.
-
-</div>
