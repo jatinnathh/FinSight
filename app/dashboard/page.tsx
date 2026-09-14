@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from "react";
 import {
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -38,6 +36,7 @@ export default function DashboardPage() {
   const [spending, setSpending] = useState<SpendingMonth[]>([]);
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedMetric, setSelectedMetric] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -97,18 +96,27 @@ export default function DashboardPage() {
             {overview.change_percent >= 0 ? "+" : ""}
             {overview.change_percent}% vs last month
           </div>
+          <button className="metric-link" onClick={() => setSelectedMetric("total")}>
+            How calculated
+          </button>
         </div>
         <div className="card">
           <div className="card-title">Avg Transaction</div>
           <div className="card-value">
             {formatCurrency(overview.avg_transaction)}
           </div>
+          <button className="metric-link" onClick={() => setSelectedMetric("average")}>
+            How calculated
+          </button>
         </div>
         <div className="card">
           <div className="card-title">Transactions</div>
           <div className="card-value">
             {overview.total_transactions.toLocaleString()}
           </div>
+          <button className="metric-link" onClick={() => setSelectedMetric("transactions")}>
+            How calculated
+          </button>
         </div>
         <div className="card">
           <div className="card-title">Subscriptions</div>
@@ -116,8 +124,18 @@ export default function DashboardPage() {
             {formatCurrency(overview.subscription_total)}
           </div>
           <div className="card-change">/month</div>
+          <button className="metric-link" onClick={() => setSelectedMetric("subscriptions")}>
+            How calculated
+          </button>
         </div>
       </div>
+
+      {selectedMetric && (
+        <MetricDisclosure
+          metricKey={selectedMetric}
+          onClose={() => setSelectedMetric(null)}
+        />
+      )}
 
       <div className="two-col">
         <div className="card">
@@ -215,4 +233,103 @@ function formatCurrency(n: number): string {
   if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return n.toFixed(0);
+}
+
+const metricDefinitions: Record<
+  string,
+  {
+    title: string;
+    source: string;
+    model: string;
+    filters: string;
+    aggregation: string;
+    sql: string;
+  }
+> = {
+  total: {
+    title: "Total Spending",
+    source: "marts.monthly_spending",
+    model: "monthly_spending.sql",
+    filters: "status = 'completed', amount > 0, current month",
+    aggregation: "SUM(amount)",
+    sql: `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_spending
+FROM transactions
+WHERE status = 'completed'
+  AND transaction_date >= date_trunc('month', CURRENT_DATE);`,
+  },
+  average: {
+    title: "Avg Transaction",
+    source: "marts.monthly_spending",
+    model: "monthly_spending.sql",
+    filters: "status = 'completed', amount > 0, current month",
+    aggregation: "AVG(amount)",
+    sql: `SELECT COALESCE(AVG(CASE WHEN amount > 0 THEN amount END), 0) AS avg_transaction
+FROM transactions
+WHERE status = 'completed'
+  AND transaction_date >= date_trunc('month', CURRENT_DATE);`,
+  },
+  transactions: {
+    title: "Transactions",
+    source: "staging.stg_transactions",
+    model: "stg_transactions.sql",
+    filters: "status = 'completed', current month",
+    aggregation: "COUNT(*)",
+    sql: `SELECT COUNT(*) AS total_transactions
+FROM transactions
+WHERE status = 'completed'
+  AND transaction_date >= date_trunc('month', CURRENT_DATE);`,
+  },
+  subscriptions: {
+    title: "Subscriptions",
+    source: "marts.subscription_detection",
+    model: "subscription_detection.sql",
+    filters: "recurring merchants with similar amount and interval",
+    aggregation: "SUM(monthly amount)",
+    sql: `SELECT COALESCE(SUM(amount), 0) AS total
+FROM subscriptions;`,
+  },
+};
+
+function MetricDisclosure({
+  metricKey,
+  onClose,
+}: {
+  metricKey: string;
+  onClose: () => void;
+}) {
+  const metric = metricDefinitions[metricKey];
+  if (!metric) return null;
+
+  return (
+    <div className="modal-surface" style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+        <div>
+          <div className="card-title">How This Metric Is Calculated</div>
+          <h2 style={{ fontSize: 18, margin: "0 0 12px" }}>{metric.title}</h2>
+        </div>
+        <button className="btn" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="metrics-grid" style={{ marginBottom: 18 }}>
+        <div>
+          <div className="card-title">Source</div>
+          <div style={{ fontSize: 13 }}>{metric.source}</div>
+        </div>
+        <div>
+          <div className="card-title">SQL Model</div>
+          <div style={{ fontSize: 13 }}>{metric.model}</div>
+        </div>
+        <div>
+          <div className="card-title">Filters</div>
+          <div style={{ fontSize: 13 }}>{metric.filters}</div>
+        </div>
+        <div>
+          <div className="card-title">Aggregation</div>
+          <div style={{ fontSize: 13 }}>{metric.aggregation}</div>
+        </div>
+      </div>
+      <div className="sql-block">{metric.sql}</div>
+    </div>
+  );
 }

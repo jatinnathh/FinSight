@@ -22,7 +22,8 @@ export default function BudgetsPage() {
   const [newLimit, setNewLimit] = useState("");
   const [loading, setLoading] = useState(true);
 
-  async function load() {
+  async function loadBudgets() {
+    setLoading(true);
     try {
       const [bRes, cRes] = await Promise.all([
         fetch("/api/v1/budgets"),
@@ -42,7 +43,35 @@ export default function BudgetsPage() {
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialBudgets() {
+      try {
+        const [bRes, cRes] = await Promise.all([
+          fetch("/api/v1/budgets"),
+          fetch("/api/v1/categories"),
+        ]);
+        if (cancelled) return;
+        if (bRes.ok) {
+          const d = await bRes.json();
+          setBudgets(d.budgets || []);
+        }
+        if (cRes.ok) {
+          const d = await cRes.json();
+          setCategories(d.categories || []);
+        }
+      } catch {
+        // API not available
+      }
+      if (!cancelled) setLoading(false);
+    }
+
+    loadInitialBudgets();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function addBudget() {
     if (!newCategoryId || !newLimit) return;
@@ -57,8 +86,7 @@ export default function BudgetsPage() {
       });
       setNewCategoryId("");
       setNewLimit("");
-      setLoading(true);
-      load();
+      loadBudgets();
     } catch {
       // handle error
     }
@@ -67,8 +95,7 @@ export default function BudgetsPage() {
   async function deleteBudget(id: number) {
     try {
       await fetch(`/api/v1/budgets/${id}`, { method: "DELETE" });
-      setLoading(true);
-      load();
+      loadBudgets();
     } catch {
       // handle error
     }

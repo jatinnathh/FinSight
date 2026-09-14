@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface DetectiveData {
   current_month_spending: number;
@@ -14,9 +14,20 @@ interface DetectiveData {
   };
 }
 
+const investigationSteps = [
+  "Checking data freshness",
+  "Checking duplicates",
+  "Checking missing merchants",
+  "Checking refunds",
+  "Checking currency conversion",
+  "Comparing merchant distribution",
+];
+
 export default function DataDetectivePage() {
   const [data, setData] = useState<DetectiveData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [investigating, setInvestigating] = useState(false);
+  const [completedSteps, setCompletedSteps] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -33,6 +44,70 @@ export default function DataDetectivePage() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (!investigating || completedSteps >= investigationSteps.length) return;
+
+    const timer = window.setTimeout(() => {
+      setCompletedSteps((value) => value + 1);
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [investigating, completedSteps]);
+
+  const rootCause = useMemo(() => {
+    if (!data) return null;
+    const entries = [
+      {
+        key: "duplicate_transactions",
+        title: "Duplicate transactions",
+        count: data.anomalies.duplicate_transactions,
+        source: "raw.transactions",
+        check: "duplicate_transaction_check",
+        likelyCause: "Duplicate ingestion during a previous pipeline run.",
+        sql: `SELECT account_id, merchant_id, transaction_date, amount, currency, COUNT(*) AS duplicate_count
+FROM transactions
+GROUP BY account_id, merchant_id, transaction_date, amount, currency
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;`,
+      },
+      {
+        key: "missing_merchants",
+        title: "Missing merchants",
+        count: data.anomalies.missing_merchants,
+        source: "raw.transactions",
+        check: "merchant_required_check",
+        likelyCause: "Source file did not include merchant descriptors for some rows.",
+        sql: `SELECT transaction_id, transaction_date, amount, description
+FROM transactions
+WHERE merchant_id IS NULL;`,
+      },
+      {
+        key: "currency_anomalies",
+        title: "Invalid currencies",
+        count: data.anomalies.currency_anomalies,
+        source: "stg_transactions",
+        check: "accepted_currency_values",
+        likelyCause: "Currency codes were not mapped to supported ISO values.",
+        sql: `SELECT transaction_id, amount, currency
+FROM transactions
+WHERE currency NOT IN ('INR', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'SGD');`,
+      },
+      {
+        key: "refunds",
+        title: "Refund activity",
+        count: data.anomalies.refunds,
+        source: "transactions",
+        check: "refund_classification_check",
+        likelyCause: "Refund volume can explain spending dips or negative outliers.",
+        sql: `SELECT transaction_id, transaction_date, amount, merchant_id
+FROM transactions
+WHERE transaction_type = 'refund';`,
+      },
+    ];
+
+    return entries.sort((a, b) => b.count - a.count)[0];
+  }, [data]);
+
   if (loading) return <div className="loading">Loading...</div>;
 
   if (!data) {
@@ -41,90 +116,132 @@ export default function DataDetectivePage() {
         <h1 className="page-title">Data Detective</h1>
         <div className="empty-state">
           <h3>No data to investigate</h3>
-          <p>Import data first to run anomaly detection</p>
+          <p>Import data first to run anomaly detection.</p>
         </div>
       </div>
     );
   }
 
-  const hasAnomaly = Math.abs(data.change_percent) > 30;
+  const hasAnomaly =
+    Math.abs(data.change_percent) > 30 || Object.values(data.anomalies).some((v) => v > 0);
+  const complete = completedSteps >= investigationSteps.length;
 
   return (
-    <div style={{ maxWidth: 600 }}>
+    <div style={{ maxWidth: 860 }}>
       <h1 className="page-title">Data Detective</h1>
-
-      {hasAnomaly && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-title">
-            ! Spending {data.change_percent > 0 ? "increased" : "decreased"}{" "}
-            {Math.abs(data.change_percent)}% this month
-          </div>
-          <div style={{ display: "flex", gap: 24, margin: "12px 0" }}>
-            <div>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>Previous Month</div>
-              <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
-                {data.previous_month_spending.toLocaleString()}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>Current Month</div>
-              <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
-                {data.current_month_spending.toLocaleString()}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <p className="page-subtitle">
+        Investigate spending changes and data-quality anomalies from the pipeline.
+      </p>
 
       <div className="card" style={{ marginBottom: 24 }}>
-        <div className="card-title">Investigating...</div>
-        <div className="detective-stat">
-          <span className="label">Duplicate transactions</span>
-          <span className="value">{data.anomalies.duplicate_transactions.toLocaleString()}</span>
+        <div className="card-title">
+          {hasAnomaly
+            ? `Spending changed ${Math.abs(data.change_percent)}% this month`
+            : "No major spending swing detected"}
         </div>
-        <div className="detective-stat">
-          <span className="label">Missing merchants</span>
-          <span className="value">{data.anomalies.missing_merchants.toLocaleString()}</span>
+        <div style={{ display: "flex", gap: 24, margin: "12px 0", flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Previous Month</div>
+            <div
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                fontFamily: "var(--font-mono), monospace",
+              }}
+            >
+              {data.previous_month_spending.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Current Month</div>
+            <div
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                fontFamily: "var(--font-mono), monospace",
+              }}
+            >
+              {data.current_month_spending.toLocaleString()}
+            </div>
+          </div>
         </div>
-        <div className="detective-stat">
-          <span className="label">Refunds</span>
-          <span className="value">{data.anomalies.refunds.toLocaleString()}</span>
-        </div>
-        <div className="detective-stat">
-          <span className="label">Currency anomalies</span>
-          <span className="value">{data.anomalies.currency_anomalies.toLocaleString()}</span>
-        </div>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            setCompletedSteps(0);
+            setInvestigating(true);
+          }}
+        >
+          Investigate
+        </button>
       </div>
 
-      <div className="card">
-        <div className="card-title">Root Cause Analysis</div>
-        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-          {data.anomalies.duplicate_transactions > 0 && (
-            <p>
-              {data.anomalies.duplicate_transactions.toLocaleString()} duplicate
-              transaction groups detected during ingestion. These records share
-              identical account, merchant, date, and amount values.
-            </p>
+      <div className="detail-grid">
+        <div className="card">
+          <div className="card-title">Investigation</div>
+          <div className="step-list">
+            {investigationSteps.map((step, index) => (
+              <div className="step-row" key={step}>
+                <span>{step}</span>
+                <span className={`badge ${completedSteps > index ? "pass" : "info"}`}>
+                  {completedSteps > index ? "DONE" : investigating ? "..." : "WAIT"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="detail-panel">
+          {complete && rootCause ? (
+            <>
+              <div className="card-title">Root Cause Found</div>
+              <h2 style={{ fontSize: 20, margin: "0 0 16px" }}>{rootCause.title}</h2>
+              <div className="detective-stat">
+                <span className="label">Affected groups</span>
+                <span className="value">{rootCause.count.toLocaleString()}</span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Source</span>
+                <span className="value">{rootCause.source}</span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Detected by</span>
+                <span className="value">{rootCause.check}</span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Likely cause</span>
+                <span className="value">{rootCause.likelyCause}</span>
+              </div>
+              <div style={{ marginTop: 18 }}>
+                <div className="card-title">SQL</div>
+                <div className="sql-block">{rootCause.sql}</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="card-title">Signals</div>
+              <div className="detective-stat">
+                <span className="label">Duplicate transactions</span>
+                <span className="value">
+                  {data.anomalies.duplicate_transactions.toLocaleString()}
+                </span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Missing merchants</span>
+                <span className="value">{data.anomalies.missing_merchants.toLocaleString()}</span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Refunds</span>
+                <span className="value">{data.anomalies.refunds.toLocaleString()}</span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Currency anomalies</span>
+                <span className="value">
+                  {data.anomalies.currency_anomalies.toLocaleString()}
+                </span>
+              </div>
+            </>
           )}
-          {data.anomalies.missing_merchants > 0 && (
-            <p>
-              {data.anomalies.missing_merchants.toLocaleString()} transactions
-              have no associated merchant. These require manual categorization
-              or merchant normalization.
-            </p>
-          )}
-          {data.anomalies.currency_anomalies > 0 && (
-            <p>
-              {data.anomalies.currency_anomalies.toLocaleString()} transactions
-              use unrecognized currency codes. These should be mapped to
-              standard ISO 4217 codes.
-            </p>
-          )}
-          {data.anomalies.duplicate_transactions === 0 &&
-            data.anomalies.missing_merchants === 0 &&
-            data.anomalies.currency_anomalies === 0 && (
-              <p>No significant anomalies detected. Data quality is clean.</p>
-            )}
         </div>
       </div>
     </div>

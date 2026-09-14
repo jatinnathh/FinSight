@@ -20,7 +20,6 @@ export default function UploadPage() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [sample, setSample] = useState<string[][]>([]);
   const [totalRows, setTotalRows] = useState(0);
-  const [suggestedMapping, setSuggestedMapping] = useState<Record<string, string>>({});
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [validationResult, setValidationResult] = useState<{
     total_rows: number;
@@ -48,7 +47,6 @@ export default function UploadPage() {
         setHeaders(data.headers);
         setSample(data.sample);
         setTotalRows(data.total_rows);
-        setSuggestedMapping(data.suggested_mapping || {});
         setMapping(data.suggested_mapping || {});
         setStep("map");
       }

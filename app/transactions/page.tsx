@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 
 interface Transaction {
   id: number;
@@ -24,34 +24,39 @@ export default function TransactionsPage() {
   const [sortOrder, setSortOrder] = useState("desc");
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const params = new URLSearchParams({
-      page: String(page),
-      per_page: "50",
-      sort_by: sortBy,
-      sort_order: sortOrder,
-    });
-    if (search) params.set("search", search);
-    if (statusFilter) params.set("status", statusFilter);
-
-    try {
-      const res = await fetch(`/api/v1/transactions?${params}`);
-      if (res.ok) {
-        const data = await res.json();
-        setTransactions(data.transactions || []);
-        setTotal(data.total || 0);
-        setTotalPages(data.total_pages || 1);
-      }
-    } catch {
-      // API not available
-    }
-    setLoading(false);
-  }, [page, search, statusFilter, sortBy, sortOrder]);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+
+    async function loadTransactions() {
+      const params = new URLSearchParams({
+        page: String(page),
+        per_page: "50",
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      });
+      if (search) params.set("search", search);
+      if (statusFilter) params.set("status", statusFilter);
+
+      try {
+        const res = await fetch(`/api/v1/transactions?${params}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (cancelled) return;
+          setTransactions(data.transactions || []);
+          setTotal(data.total || 0);
+          setTotalPages(data.total_pages || 1);
+        }
+      } catch {
+        // API not available
+      }
+      if (!cancelled) setLoading(false);
+    }
+
+    loadTransactions();
+    return () => {
+      cancelled = true;
+    };
+  }, [page, search, statusFilter, sortBy, sortOrder]);
 
   function handleSort(col: string) {
     if (sortBy === col) {

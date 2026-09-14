@@ -4,6 +4,7 @@ Pipeline status API routes.
 
 from fastapi import APIRouter
 from backend.db.database import execute_query, execute_one
+from backend.services.pipeline_metadata import build_pipeline_steps
 
 router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
 
@@ -30,6 +31,10 @@ async def pipeline_status():
         delta = latest["finished_at"] - latest["started_at"]
         execution_time = str(delta)
 
+    steps = latest["steps"] or []
+    if not steps:
+        steps = await build_pipeline_steps(latest["rows_processed"])
+
     return {
         "run_id": latest["run_id"],
         "started_at": latest["started_at"].isoformat() if latest["started_at"] else None,
@@ -38,7 +43,7 @@ async def pipeline_status():
         "rows_processed": latest["rows_processed"],
         "rows_rejected": latest["rows_rejected"],
         "error_message": latest["error_message"],
-        "steps": latest["steps"],
+        "steps": steps,
         "execution_time": execution_time,
     }
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from backend.services.ingestion import detect_columns, parse_csv_content, apply_mapping, try_parse_date
 from backend.services.validation import run_all_checks
+from backend.services.pipeline_metadata import record_pipeline_run
 from backend.db.database import execute_command, execute_query, execute_one, init_schema, get_pool
 
 router = APIRouter(prefix="/api/v1/data", tags=["data"])
@@ -135,6 +136,8 @@ async def import_data(data: ImportRequest):
             )
             inserted += 1
 
+    await record_pipeline_run(inserted + skipped, skipped, "success")
+
     return {"inserted": inserted, "skipped": skipped}
 
 
@@ -164,6 +167,7 @@ async def load_demo():
         raise HTTPException(500, f"Data seeding failed: {result.stderr}")
 
     count = await execute_one("SELECT COUNT(*) as cnt FROM transactions")
+    await record_pipeline_run(count["cnt"], 0, "success")
 
     return {
         "status": "success",
@@ -177,3 +181,149 @@ async def data_quality():
     """Run data quality checks."""
     checks = await run_all_checks()
     return {"checks": checks}
+
+
+QUALITY_DETAIL_QUERIES = {
+    "Required columns (account_id, date, amount)": {
+        "sql": """
+SELECT transaction_id, account_id, transaction_date, amount
+FROM transactions
+WHERE account_id IS NULL OR transaction_date IS NULL OR amount IS NULL
+LIMIT 25;
+""",
+        "query": """
+            SELECT transaction_id, account_id, transaction_date, amount
+            FROM transactions
+            WHERE account_id IS NULL OR transaction_date IS NULL OR amount IS NULL
+            LIMIT 25
+        """,
+    },
+    "Future transaction dates": {
+        "sql": """
+SELECT transaction_id, transaction_date, amount, currency, status
+FROM transactions
+WHERE transaction_date > CURRENT_DATE
+ORDER BY transaction_date DESC
+LIMIT 25;
+""",
+        "query": """
+            SELECT transaction_id, transaction_date, amount, currency, status
+            FROM transactions
+            WHERE transaction_date > CURRENT_DATE
+            ORDER BY transaction_date DESC
+            LIMIT 25
+        """,
+    },
+    "Duplicate transactions": {
+        "sql": """
+SELECT account_id, merchant_id, transaction_date, amount, currency, COUNT(*) AS duplicate_count
+FROM transactions
+GROUP BY account_id, merchant_id, transaction_date, amount, currency
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC
+LIMIT 25;
+""",
+        "query": """
+            SELECT account_id, merchant_id, transaction_date, amount, currency, COUNT(*) AS duplicate_count
+            FROM transactions
+            GROUP BY account_id, merchant_id, transaction_date, amount, currency
+            HAVING COUNT(*) > 1
+            ORDER BY duplicate_count DESC
+            LIMIT 25
+        """,
+    },
+    "Missing merchant": {
+        "sql": """
+SELECT transaction_id, transaction_date, amount, currency, description
+FROM transactions
+WHERE merchant_id IS NULL
+ORDER BY transaction_date DESC
+LIMIT 25;
+""",
+        "query": """
+            SELECT transaction_id, transaction_date, amount, currency, description
+            FROM transactions
+            WHERE merchant_id IS NULL
+            ORDER BY transaction_date DESC
+            LIMIT 25
+        """,
+    },
+    "Missing categories": {
+        "sql": """
+SELECT t.transaction_id, COALESCE(m.normalized_name, t.description) AS merchant, c.category_name AS category
+FROM transactions t
+LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+LEFT JOIN categories c ON m.category_id = c.category_id
+WHERE m.category_id IS NULL AND t.merchant_id IS NOT NULL
+LIMIT 25;
+""",
+        "query": """
+            SELECT t.transaction_id, COALESCE(m.normalized_name, t.description) AS merchant,
+                   c.category_name AS category
+            FROM transactions t
+            LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+            LEFT JOIN categories c ON m.category_id = c.category_id
+            WHERE m.category_id IS NULL AND t.merchant_id IS NOT NULL
+            LIMIT 25
+        """,
+    },
+    "Unknown currencies": {
+        "sql": """
+SELECT transaction_id, transaction_date, amount, currency, status
+FROM transactions
+WHERE currency NOT IN ('INR', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'SGD')
+ORDER BY transaction_date DESC
+LIMIT 25;
+""",
+        "query": """
+            SELECT transaction_id, transaction_date, amount, currency, status
+            FROM transactions
+            WHERE currency NOT IN ('INR', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'SGD')
+            ORDER BY transaction_date DESC
+            LIMIT 25
+        """,
+    },
+    "Negative non-refund amounts": {
+        "sql": """
+SELECT transaction_id, transaction_date, amount, currency, transaction_type
+FROM transactions
+WHERE amount < 0 AND transaction_type != 'refund'
+ORDER BY transaction_date DESC
+LIMIT 25;
+""",
+        "query": """
+            SELECT transaction_id, transaction_date, amount, currency, transaction_type
+            FROM transactions
+            WHERE amount < 0 AND transaction_type != 'refund'
+            ORDER BY transaction_date DESC
+            LIMIT 25
+        """,
+    },
+}
+
+
+@router.get("/quality/detail")
+async def data_quality_detail(check_name: str):
+    """Return sample affected records and SQL for a known quality check."""
+    detail = QUALITY_DETAIL_QUERIES.get(check_name)
+    if not detail:
+        return {"check_name": check_name, "sql": None, "records": []}
+
+    rows = await execute_query(detail["query"])
+    records = []
+    for row in rows:
+        record = {}
+        for key, value in dict(row).items():
+            if hasattr(value, "isoformat"):
+                record[key] = value.isoformat()
+            elif not isinstance(value, (str, int, float, bool, type(None))):
+                record[key] = str(value)
+            else:
+                record[key] = value
+        records.append(record)
+
+    return {
+        "check_name": check_name,
+        "sql": detail["sql"].strip(),
+        "records": records,
+    }

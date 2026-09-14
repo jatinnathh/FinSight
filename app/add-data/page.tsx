@@ -29,31 +29,57 @@ export default function AddDataPage() {
   return (
     <div>
       <h1 className="page-title">Add Data</h1>
-      <p className="page-subtitle">Choose how to import your financial data</p>
+      <p className="page-subtitle">
+        Start with a bank export or the intentionally messy demo dataset.
+      </p>
 
       <div className="source-grid">
         <Link href="/add-data/upload" className="source-card">
           <h3>Upload CSV</h3>
-          <p>Import transactions from a CSV file with column mapping</p>
+          <p>Import a bank or wallet transaction export.</p>
+          <ol>
+            <li>Detect your columns</li>
+            <li>Map them to the FinSight schema</li>
+            <li>Validate records before import</li>
+            <li>Detect duplicates and anomalies</li>
+            <li>Load clean data into PostgreSQL</li>
+          </ol>
+          <span className="btn btn-primary">Upload CSV</span>
         </Link>
 
         <div className="source-card" onClick={loading ? undefined : loadDemo}>
-          <h3>Demo Data</h3>
+          <h3>Try Demo Dataset</h3>
           <p>
             {loading
               ? "Loading 100K transactions..."
-              : "Load sample dataset with 100K messy transactions"}
+              : "100,000 synthetic transactions with deliberate data-quality issues."}
           </p>
+          <ul>
+            <li>Duplicate records</li>
+            <li>Merchant-name variations</li>
+            <li>Missing merchants and categories</li>
+            <li>Multiple and invalid currencies</li>
+            <li>Failed, refunded, debit, and credit transactions</li>
+          </ul>
+          <button className="btn btn-primary" disabled={loading}>
+            {loading ? "Loading..." : "Load Demo Data"}
+          </button>
         </div>
 
         <div className="source-card" style={{ opacity: 0.4 }}>
           <h3>REST API</h3>
-          <p>Connect via API endpoint (coming soon)</p>
+          <p>
+            Stream transactions into the same ingestion, validation, and
+            transformation pipeline. Coming soon.
+          </p>
         </div>
 
         <div className="source-card" style={{ opacity: 0.4 }}>
           <h3>Bank Export</h3>
-          <p>Import from bank statement (coming soon)</p>
+          <p>
+            Parse statement formats from specific institutions and route them
+            through column mapping. Coming soon.
+          </p>
         </div>
       </div>
 
@@ -61,8 +87,8 @@ export default function AddDataPage() {
         <div className="card" style={{ marginTop: 24, maxWidth: 600 }}>
           <p style={{ fontSize: 13 }}>{result}</p>
           {result.startsWith("Done") && (
-            <Link href="/dashboard" className="btn btn-primary" style={{ marginTop: 12 }}>
-              View Dashboard
+            <Link href="/pipeline" className="btn btn-primary" style={{ marginTop: 12 }}>
+              View Pipeline Run
             </Link>
           )}
         </div>

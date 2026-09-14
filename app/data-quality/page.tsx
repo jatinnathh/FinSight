@@ -9,9 +9,18 @@ interface Check {
   affected_rows: number;
 }
 
+interface Detail {
+  check_name: string;
+  sql: string | null;
+  records: Record<string, unknown>[];
+}
+
 export default function DataQualityPage() {
   const [checks, setChecks] = useState<Check[]>([]);
+  const [selected, setSelected] = useState<Check | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -19,7 +28,14 @@ export default function DataQualityPage() {
         const res = await fetch("/api/v1/data/quality");
         if (res.ok) {
           const data = await res.json();
-          setChecks(data.checks || []);
+          const loadedChecks = data.checks || [];
+          setChecks(loadedChecks);
+          const firstActionable =
+            loadedChecks.find((c: Check) => c.affected_rows > 0 && c.status !== "info") ||
+            loadedChecks[0];
+          if (firstActionable) {
+            setSelected(firstActionable);
+          }
         }
       } catch {
         // API not available
@@ -29,6 +45,32 @@ export default function DataQualityPage() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (!selected || selected.status === "info") {
+      return;
+    }
+    const checkName = selected.check_name;
+
+    async function loadDetail() {
+      setDetailLoading(true);
+      try {
+        const res = await fetch(
+          `/api/v1/data/quality/detail?check_name=${encodeURIComponent(
+            checkName
+          )}`
+        );
+        if (res.ok) {
+          setDetail(await res.json());
+        }
+      } catch {
+        setDetail(null);
+      }
+      setDetailLoading(false);
+    }
+
+    loadDetail();
+  }, [selected]);
+
   if (loading) return <div className="loading">Loading...</div>;
 
   const passed = checks.filter((c) => c.status === "pass").length;
@@ -36,8 +78,11 @@ export default function DataQualityPage() {
   const failed = checks.filter((c) => c.status === "fail").length;
 
   return (
-    <div style={{ maxWidth: 600 }}>
+    <div>
       <h1 className="page-title">Data Quality</h1>
+      <p className="page-subtitle">
+        Click a check to inspect affected records and the SQL behind it.
+      </p>
 
       <div className="metrics-grid" style={{ marginBottom: 24 }}>
         <div className="card">
@@ -54,38 +99,121 @@ export default function DataQualityPage() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-title">Check Results</div>
-        {checks.map((check, i) => (
-          <div key={i} className="check-item">
-            <span className={`check-icon ${check.status}`}>
-              {check.status === "pass"
-                ? "v"
-                : check.status === "warn"
-                  ? "!"
-                  : check.status === "fail"
-                    ? "x"
-                    : "-"}
-            </span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 500 }}>{check.check_name}</div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                {check.details}
-              </div>
-            </div>
-            {check.affected_rows > 0 && check.status !== "info" && (
-              <span
-                style={{
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono), monospace",
-                  color: "var(--muted)",
-                }}
-              >
-                {check.affected_rows}
+      <div className="detail-grid">
+        <div className="card">
+          <div className="card-title">Check Results</div>
+          {checks.map((check) => (
+            <button
+              key={check.check_name}
+              className="check-item"
+              onClick={() => setSelected(check)}
+              style={{
+                width: "100%",
+                background: selected?.check_name === check.check_name ? "var(--surface)" : "none",
+                borderLeft: 0,
+                borderRight: 0,
+                borderTop: 0,
+                cursor: "pointer",
+                textAlign: "left",
+                fontFamily: "inherit",
+              }}
+            >
+              <span className={`check-icon ${check.status}`}>
+                {check.status === "pass"
+                  ? "v"
+                  : check.status === "warn"
+                    ? "!"
+                    : check.status === "fail"
+                      ? "x"
+                      : "-"}
               </span>
-            )}
-          </div>
-        ))}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 500 }}>{check.check_name}</div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                  {check.details}
+                </div>
+              </div>
+              {check.affected_rows > 0 && check.status !== "info" && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontFamily: "var(--font-mono), monospace",
+                    color: "var(--muted)",
+                  }}
+                >
+                  {check.affected_rows.toLocaleString()}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="detail-panel">
+          <div className="card-title">{selected?.check_name || "Select Check"}</div>
+          {selected ? (
+            <>
+              <div className="detective-stat">
+                <span className="label">Status</span>
+                <span className={`badge ${selected.status}`}>
+                  {selected.status.toUpperCase()}
+                </span>
+              </div>
+              <div className="detective-stat">
+                <span className="label">Affected rows</span>
+                <span className="value">{selected.affected_rows.toLocaleString()}</span>
+              </div>
+
+              {detailLoading && <div className="loading">Loading detail...</div>}
+
+              {!detailLoading && selected.status !== "info" && detail && (
+                <>
+                  {detail.records.length > 0 ? (
+                    <div style={{ marginTop: 18 }}>
+                      <div className="card-title">Affected Records</div>
+                      <div className="data-table-mini">
+                        <table>
+                          <thead>
+                            <tr>
+                              {Object.keys(detail.records[0]).map((key) => (
+                                <th key={key}>{key}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {detail.records.map((row, index) => (
+                              <tr key={index}>
+                                {Object.values(row).map((value, valueIndex) => (
+                                  <td key={valueIndex} style={{ fontSize: 12 }}>
+                                    {value === null ? "NULL" : String(value)}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ color: "var(--muted)", fontSize: 13 }}>
+                      No affected records found for this check.
+                    </p>
+                  )}
+
+                  {detail.sql && (
+                    <div style={{ marginTop: 18 }}>
+                      <div className="card-title">SQL Check</div>
+                      <div className="sql-block">{detail.sql}</div>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            <p style={{ color: "var(--muted)", fontSize: 13 }}>
+              Run quality checks to inspect issues.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
