@@ -156,7 +156,7 @@ async def _call_groq(prompt: str) -> str:
     client = AsyncGroq(api_key=GROQ_API_KEY, http_client=http_client)
     try:
         response = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=1024,
@@ -172,7 +172,7 @@ async def _call_gemini(prompt: str) -> str:
 
     client = genai.Client(api_key=GEMINI_API_KEY)
     response = await client.aio.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
     )
     return response.text
