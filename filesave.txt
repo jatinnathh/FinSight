@@ -1,0 +1,1942 @@
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\analytics.py ====================
+"""
+Analytics API routes.
+"""
+
+from fastapi import APIRouter
+from backend.services.analytics import get_spending_by_category_monthly, get_top_merchants
+
+router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+
+
+@router.get("/category-monthly")
+async def category_monthly():
+    data = await get_spending_by_category_monthly()
+    return {"data": data}
+
+
+@router.get("/merchants")
+async def merchants(limit: int = 20):
+    data = await get_top_merchants(limit)
+    return {"data": data}
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\ask.py ====================
+"""
+Ask FinSight API route: natural language to SQL.
+"""
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from backend.services.llm import generate_sql, explain_result
+from backend.db.database import execute_query
+
+router = APIRouter(prefix="/api/v1/ask", tags=["ask"])
+
+
+class AskRequest(BaseModel):
+    question: str
+
+
+@router.post("")
+async def ask_finsight(data: AskRequest):
+    if not data.question.strip():
+        return {"success": False, "error": "Question cannot be empty"}
+
+    # Generate SQL
+    result = await generate_sql(data.question)
+
+    if not result["success"]:
+        return result
+
+    sql = result["sql"]
+    provider = result["provider"]
+
+    # Execute SQL
+    try:
+        rows = await execute_query(sql)
+        records = [dict(r) for r in rows]
+
+        # Convert non-serializable types
+        for record in records:
+            for key, val in record.items():
+                if hasattr(val, 'isoformat'):
+                    record[key] = val.isoformat()
+                elif isinstance(val, (bytes,)):
+                    record[key] = val.decode()
+                elif not isinstance(val, (str, int, float, bool, type(None))):
+                    record[key] = str(val)
+
+    except Exception as e:
+        return {"success": False, "error": f"SQL execution failed: {str(e)}", "sql": sql}
+
+    # Explain result
+    explanation = await explain_result(data.question, sql, records)
+
+    return {
+        "success": True,
+        "question": data.question,
+        "sql": sql,
+        "results": records[:100],
+        "total_rows": len(records),
+        "explanation": explanation,
+        "provider": provider,
+    }
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\budgets.py ====================
+"""
+Budgets API routes.
+"""
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+from backend.services.analytics import get_budgets
+from backend.db.database import execute_command, execute_one
+
+router = APIRouter(prefix="/api/v1/budgets", tags=["budgets"])
+
+
+class BudgetCreate(BaseModel):
+    category_id: int
+    monthly_limit: float
+    user_id: int = 1
+
+
+class BudgetUpdate(BaseModel):
+    monthly_limit: float
+
+
+@router.get("")
+async def list_budgets(user_id: int = 1):
+    return {"budgets": await get_budgets(user_id)}
+
+
+@router.post("")
+async def create_budget(data: BudgetCreate):
+    row = await execute_one(
+        "INSERT INTO budgets (user_id, category_id, monthly_limit) VALUES ($1, $2, $3) RETURNING budget_id",
+        data.user_id, data.category_id, data.monthly_limit
+    )
+    return {"budget_id": row["budget_id"], "status": "created"}
+
+
+@router.put("/{budget_id}")
+async def update_budget(budget_id: int, data: BudgetUpdate):
+    await execute_command(
+        "UPDATE budgets SET monthly_limit = $1 WHERE budget_id = $2",
+        data.monthly_limit, budget_id
+    )
+    return {"budget_id": budget_id, "status": "updated"}
+
+
+@router.delete("/{budget_id}")
+async def delete_budget(budget_id: int):
+    await execute_command("DELETE FROM budgets WHERE budget_id = $1", budget_id)
+    return {"budget_id": budget_id, "status": "deleted"}
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\dashboard.py ====================
+"""
+Dashboard API routes.
+"""
+
+from fastapi import APIRouter
+from backend.services.analytics import get_overview, get_spending_over_time, get_top_categories, get_top_merchants
+
+router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
+
+
+@router.get("/overview")
+async def overview():
+    data = await get_overview()
+    return data
+
+
+@router.get("/spending-over-time")
+async def spending_over_time(months: int = 12):
+    data = await get_spending_over_time(months)
+    return {"data": data}
+
+
+@router.get("/top-categories")
+async def top_categories(limit: int = 10):
+    data = await get_top_categories(limit)
+    return {"data": data}
+
+
+@router.get("/top-merchants")
+async def top_merchants(limit: int = 10):
+    data = await get_top_merchants(limit)
+    return {"data": data}
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\data.py ====================
+"""
+Data API routes: CSV upload, column mapping, validation, demo data.
+"""
+
+import csv
+import io
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from pydantic import BaseModel
+
+from backend.services.ingestion import detect_columns, parse_csv_content, apply_mapping, try_parse_date
+from backend.services.validation import run_all_checks
+from backend.db.database import execute_command, execute_query, execute_one, init_schema, get_pool
+
+router = APIRouter(prefix="/api/v1/data", tags=["data"])
+
+
+class ColumnMapping(BaseModel):
+    mapping: dict[str, str]
+    csv_content: str
+
+
+class ImportRequest(BaseModel):
+    mapping: dict[str, str]
+    csv_content: str
+    account_id: int = 1
+
+
+@router.post("/upload-csv")
+async def upload_csv(file: UploadFile = File(...)):
+    """Upload a CSV file and detect columns."""
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, "Only CSV files are supported")
+
+    content = await file.read()
+    text = content.decode("utf-8")
+    result = parse_csv_content(text)
+
+    return {
+        "filename": file.filename,
+        "headers": result["headers"],
+        "sample": result["sample"],
+        "total_rows": result["total_rows"],
+        "suggested_mapping": result["mapping"],
+        "date_range": result["date_range"],
+        "currencies": result["currencies"],
+    }
+
+
+@router.post("/validate")
+async def validate_mapping(data: ColumnMapping):
+    """Validate a column mapping against CSV data."""
+    reader = csv.reader(io.StringIO(data.csv_content))
+    headers = next(reader)
+    rows = list(reader)
+
+    mapped = apply_mapping(rows, headers, data.mapping)
+
+    issues = []
+    valid_count = 0
+    invalid_dates = 0
+    missing_amounts = 0
+    missing_merchants = 0
+
+    for record in mapped:
+        if record.get("transaction_date") is None:
+            invalid_dates += 1
+        if record.get("amount") is None:
+            missing_amounts += 1
+        if not record.get("merchant"):
+            missing_merchants += 1
+        else:
+            valid_count += 1
+
+    if invalid_dates > 0:
+        issues.append({"type": "warn", "message": f"{invalid_dates} rows with unparseable dates"})
+    if missing_amounts > 0:
+        issues.append({"type": "fail", "message": f"{missing_amounts} rows with missing amounts"})
+    if missing_merchants > 0:
+        issues.append({"type": "warn", "message": f"{missing_merchants} rows with missing merchant"})
+
+    return {
+        "total_rows": len(rows),
+        "valid_rows": valid_count,
+        "issues": issues,
+    }
+
+
+@router.post("/import")
+async def import_data(data: ImportRequest):
+    """Import mapped CSV data into the database."""
+    reader = csv.reader(io.StringIO(data.csv_content))
+    headers = next(reader)
+    rows = list(reader)
+
+    mapped = apply_mapping(rows, headers, data.mapping)
+
+    inserted = 0
+    skipped = 0
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        for record in mapped:
+            if record.get("transaction_date") is None or record.get("amount") is None:
+                skipped += 1
+                continue
+
+            # Find or create merchant
+            merchant_id = None
+            if record.get("merchant"):
+                m = await conn.fetchrow(
+                    "SELECT merchant_id FROM merchants WHERE merchant_name = $1 OR normalized_name = $1 LIMIT 1",
+                    record["merchant"]
+                )
+                if m:
+                    merchant_id = m["merchant_id"]
+                else:
+                    m = await conn.fetchrow(
+                        "INSERT INTO merchants (merchant_name, normalized_name) VALUES ($1, $1) RETURNING merchant_id",
+                        record["merchant"]
+                    )
+                    merchant_id = m["merchant_id"]
+
+            await conn.execute(
+                """INSERT INTO transactions
+                   (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                data.account_id,
+                merchant_id,
+                record["transaction_date"],
+                record["amount"],
+                record.get("currency", "INR"),
+                record.get("status", "completed"),
+                record.get("transaction_type", "debit"),
+                record.get("description", record.get("merchant", "")),
+            )
+            inserted += 1
+
+    return {"inserted": inserted, "skipped": skipped}
+
+
+@router.post("/load-demo")
+async def load_demo():
+    """Load demo dataset (generates and seeds data)."""
+    import subprocess
+    import sys
+    import os
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # Use the venv Python — sys.executable may point to anaconda under uvicorn reloader
+    venv_python = os.path.join(base_dir, "venv", "Scripts", "python.exe")
+    python_exe = venv_python if os.path.exists(venv_python) else sys.executable
+
+    # Generate data
+    gen_script = os.path.join(base_dir, "data_generator", "generate_data.py")
+    result = subprocess.run([python_exe, gen_script], capture_output=True, text=True, cwd=base_dir)
+    if result.returncode != 0:
+        raise HTTPException(500, f"Data generation failed: {result.stderr}")
+
+    # Seed data
+    seed_script = os.path.join(base_dir, "data_generator", "seed_data.py")
+    result = subprocess.run([python_exe, seed_script], capture_output=True, text=True, cwd=base_dir)
+    if result.returncode != 0:
+        raise HTTPException(500, f"Data seeding failed: {result.stderr}")
+
+    count = await execute_one("SELECT COUNT(*) as cnt FROM transactions")
+
+    return {
+        "status": "success",
+        "message": "Demo data loaded successfully",
+        "total_transactions": count["cnt"],
+    }
+
+
+@router.get("/quality")
+async def data_quality():
+    """Run data quality checks."""
+    checks = await run_all_checks()
+    return {"checks": checks}
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\detective.py ====================
+"""
+Data Detective API route.
+"""
+
+from fastapi import APIRouter
+from backend.services.analytics import get_data_detective
+
+router = APIRouter(prefix="/api/v1/detective", tags=["detective"])
+
+
+@router.get("")
+async def data_detective():
+    return await get_data_detective()
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\pipeline.py ====================
+"""
+Pipeline status API routes.
+"""
+
+from fastapi import APIRouter
+from backend.db.database import execute_query, execute_one
+
+router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
+
+
+@router.get("/status")
+async def pipeline_status():
+    """Get latest pipeline run status."""
+    latest = await execute_one("""
+        SELECT run_id, started_at, finished_at, status,
+               rows_processed, rows_rejected, error_message, steps
+        FROM pipeline_runs
+        ORDER BY started_at DESC
+        LIMIT 1
+    """)
+
+    if not latest:
+        return {
+            "status": "no_runs",
+            "message": "No pipeline runs yet",
+        }
+
+    execution_time = None
+    if latest["started_at"] and latest["finished_at"]:
+        delta = latest["finished_at"] - latest["started_at"]
+        execution_time = str(delta)
+
+    return {
+        "run_id": latest["run_id"],
+        "started_at": latest["started_at"].isoformat() if latest["started_at"] else None,
+        "finished_at": latest["finished_at"].isoformat() if latest["finished_at"] else None,
+        "status": latest["status"],
+        "rows_processed": latest["rows_processed"],
+        "rows_rejected": latest["rows_rejected"],
+        "error_message": latest["error_message"],
+        "steps": latest["steps"],
+        "execution_time": execution_time,
+    }
+
+
+@router.get("/history")
+async def pipeline_history():
+    """Get pipeline run history."""
+    rows = await execute_query("""
+        SELECT run_id, started_at, finished_at, status,
+               rows_processed, rows_rejected
+        FROM pipeline_runs
+        ORDER BY started_at DESC
+        LIMIT 20
+    """)
+
+    return {
+        "runs": [
+            {
+                "run_id": r["run_id"],
+                "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+                "finished_at": r["finished_at"].isoformat() if r["finished_at"] else None,
+                "status": r["status"],
+                "rows_processed": r["rows_processed"],
+                "rows_rejected": r["rows_rejected"],
+            }
+            for r in rows
+        ]
+    }
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\subscriptions.py ====================
+"""
+Subscriptions API routes.
+"""
+
+from fastapi import APIRouter
+from backend.services.analytics import detect_subscriptions
+
+router = APIRouter(prefix="/api/v1/subscriptions", tags=["subscriptions"])
+
+
+@router.get("")
+async def list_subscriptions():
+    return await detect_subscriptions()
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\transactions.py ====================
+"""
+Transactions API routes.
+"""
+
+from fastapi import APIRouter, Query
+from backend.services.analytics import get_transactions
+
+router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
+
+
+@router.get("")
+async def list_transactions(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=100),
+    search: str = Query(None),
+    category: str = Query(None),
+    status: str = Query(None),
+    sort_by: str = Query("transaction_date"),
+    sort_order: str = Query("desc"),
+):
+    return await get_transactions(page, per_page, search, category, status, sort_by, sort_order)
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\api\__init__.py ====================
+# api package
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\db\database.py ====================
+import os
+import asyncpg
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+
+DATABASE_URL = os.getenv("DB_URL", "")
+
+# Connection pool
+_pool = None
+
+
+async def get_pool():
+    global _pool
+    if _pool is None:
+        # Neon requires SSL
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=2,
+            max_size=10,
+            ssl="require"
+        )
+    return _pool
+
+
+async def close_pool():
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+
+
+async def execute_query(query: str, *args):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch(query, *args)
+
+
+async def execute_one(query: str, *args):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(query, *args)
+
+
+async def execute_command(query: str, *args):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.execute(query, *args)
+
+
+async def execute_many(query: str, args_list: list):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.executemany(query, args_list)
+
+
+async def init_schema():
+    """Run schema.sql to initialize database tables."""
+    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+    with open(schema_path, "r") as f:
+        schema_sql = f.read()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(schema_sql)
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\db\__init__.py ====================
+# db package
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\services\analytics.py ====================
+"""
+Analytics service: dashboard queries, spending analysis, subscription detection.
+"""
+
+from backend.db.database import execute_query, execute_one
+
+
+async def get_overview():
+    """Dashboard overview metrics."""
+    total = await execute_one("""
+        SELECT
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_spending,
+            COUNT(*) as total_transactions,
+            COALESCE(AVG(CASE WHEN amount > 0 THEN amount END), 0) as avg_transaction
+        FROM transactions
+        WHERE status = 'completed'
+          AND transaction_date >= date_trunc('month', CURRENT_DATE)
+    """)
+
+    prev_month = await execute_one("""
+        SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_spending
+        FROM transactions
+        WHERE status = 'completed'
+          AND transaction_date >= date_trunc('month', CURRENT_DATE) - interval '1 month'
+          AND transaction_date < date_trunc('month', CURRENT_DATE)
+    """)
+
+    sub_total = await execute_one("""
+        SELECT COALESCE(SUM(amount), 0) as total
+        FROM subscriptions
+    """)
+
+    current_spending = float(total["total_spending"])
+    prev_spending = float(prev_month["total_spending"])
+    change_pct = 0
+    if prev_spending > 0:
+        change_pct = round(((current_spending - prev_spending) / prev_spending) * 100, 1)
+
+    return {
+        "total_spending": round(current_spending, 2),
+        "total_transactions": total["total_transactions"],
+        "avg_transaction": round(float(total["avg_transaction"]), 2),
+        "prev_month_spending": round(prev_spending, 2),
+        "change_percent": change_pct,
+        "subscription_total": round(float(sub_total["total"]), 2),
+    }
+
+
+async def get_spending_over_time(months: int = 12):
+    """Monthly spending trend."""
+    rows = await execute_query("""
+        SELECT
+            to_char(transaction_date, 'YYYY-MM') as month,
+            SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as spending
+        FROM transactions
+        WHERE status = 'completed'
+          AND transaction_date >= CURRENT_DATE - make_interval(months => $1)
+        GROUP BY to_char(transaction_date, 'YYYY-MM')
+        ORDER BY month
+    """, months)
+    return [{"month": r["month"], "spending": round(float(r["spending"]), 2)} for r in rows]
+
+
+async def get_top_categories(limit: int = 10):
+    """Top spending categories."""
+    rows = await execute_query("""
+        SELECT
+            COALESCE(c.category_name, 'Uncategorized') as category,
+            SUM(t.amount) as total,
+            COUNT(*) as count
+        FROM transactions t
+        LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+        LEFT JOIN categories c ON m.category_id = c.category_id
+        WHERE t.status = 'completed' AND t.amount > 0
+        GROUP BY c.category_name
+        ORDER BY total DESC
+        LIMIT $1
+    """, limit)
+    return [{"category": r["category"], "total": round(float(r["total"]), 2), "count": r["count"]} for r in rows]
+
+
+async def get_top_merchants(limit: int = 10):
+    """Top merchants by spending."""
+    rows = await execute_query("""
+        SELECT
+            COALESCE(m.normalized_name, t.description, 'Unknown') as merchant,
+            SUM(t.amount) as total,
+            COUNT(*) as count
+        FROM transactions t
+        LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+        WHERE t.status = 'completed' AND t.amount > 0
+        GROUP BY COALESCE(m.normalized_name, t.description, 'Unknown')
+        ORDER BY total DESC
+        LIMIT $1
+    """, limit)
+    return [{"merchant": r["merchant"], "total": round(float(r["total"]), 2), "count": r["count"]} for r in rows]
+
+
+async def get_transactions(
+    page: int = 1,
+    per_page: int = 50,
+    search: str = None,
+    category: str = None,
+    status: str = None,
+    sort_by: str = "transaction_date",
+    sort_order: str = "desc"
+):
+    """Paginated transaction list with search/filter."""
+    allowed_sorts = {"transaction_date", "amount", "merchant", "status"}
+    if sort_by not in allowed_sorts:
+        sort_by = "transaction_date"
+    if sort_order not in ("asc", "desc"):
+        sort_order = "desc"
+
+    conditions = []
+    params = []
+    idx = 1
+
+    if search:
+        conditions.append(f"(m.normalized_name ILIKE ${idx} OR t.description ILIKE ${idx})")
+        params.append(f"%{search}%")
+        idx += 1
+
+    if category:
+        conditions.append(f"c.category_name = ${idx}")
+        params.append(category)
+        idx += 1
+
+    if status:
+        conditions.append(f"t.status = ${idx}")
+        params.append(status)
+        idx += 1
+
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    sort_col = {
+        "transaction_date": "t.transaction_date",
+        "amount": "t.amount",
+        "merchant": "m.normalized_name",
+        "status": "t.status",
+    }.get(sort_by, "t.transaction_date")
+
+    offset = (page - 1) * per_page
+    params.extend([per_page, offset])
+
+    rows = await execute_query(f"""
+        SELECT
+            t.transaction_id,
+            t.transaction_date,
+            COALESCE(m.normalized_name, t.description, 'Unknown') as merchant,
+            COALESCE(c.category_name, 'Uncategorized') as category,
+            t.amount,
+            t.currency,
+            t.status,
+            t.transaction_type
+        FROM transactions t
+        LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+        LEFT JOIN categories c ON m.category_id = c.category_id
+        {where}
+        ORDER BY {sort_col} {sort_order}
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """, *params)
+
+    count_row = await execute_one(f"""
+        SELECT COUNT(*) as cnt
+        FROM transactions t
+        LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+        LEFT JOIN categories c ON m.category_id = c.category_id
+        {where}
+    """, *params[:-2])
+
+    return {
+        "transactions": [
+            {
+                "id": r["transaction_id"],
+                "date": r["transaction_date"].isoformat() if r["transaction_date"] else None,
+                "merchant": r["merchant"],
+                "category": r["category"],
+                "amount": float(r["amount"]),
+                "currency": r["currency"],
+                "status": r["status"],
+                "type": r["transaction_type"],
+            }
+            for r in rows
+        ],
+        "total": count_row["cnt"],
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (count_row["cnt"] + per_page - 1) // per_page,
+    }
+
+
+async def detect_subscriptions():
+    """Detect recurring transactions (same merchant, similar amount, regular intervals)."""
+    rows = await execute_query("""
+        WITH recurring AS (
+            SELECT
+                COALESCE(m.normalized_name, t.description) as merchant,
+                ROUND(AVG(t.amount)::numeric, 2) as avg_amount,
+                COUNT(*) as occurrences,
+                MIN(t.transaction_date) as first_seen,
+                MAX(t.transaction_date) as last_seen,
+                ROUND(
+                    EXTRACT(EPOCH FROM (MAX(t.transaction_date) - MIN(t.transaction_date)))
+                    / NULLIF(COUNT(*) - 1, 0) / 86400
+                ) as avg_days_between
+            FROM transactions t
+            LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+            WHERE t.status = 'completed' AND t.amount > 0
+            GROUP BY COALESCE(m.normalized_name, t.description)
+            HAVING COUNT(*) >= 3
+        )
+        SELECT *
+        FROM recurring
+        WHERE avg_days_between BETWEEN 25 AND 35
+           OR avg_days_between BETWEEN 355 AND 375
+           OR avg_days_between BETWEEN 6 AND 8
+        ORDER BY avg_amount DESC
+    """)
+
+    subscriptions = []
+    for r in rows:
+        days = float(r["avg_days_between"]) if r["avg_days_between"] else 30
+        if days <= 10:
+            frequency = "weekly"
+        elif days <= 40:
+            frequency = "monthly"
+        else:
+            frequency = "yearly"
+
+        subscriptions.append({
+            "merchant": r["merchant"],
+            "amount": float(r["avg_amount"]),
+            "frequency": frequency,
+            "occurrences": r["occurrences"],
+            "first_seen": r["first_seen"].isoformat() if r["first_seen"] else None,
+            "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
+        })
+
+    monthly_total = sum(
+        s["amount"] if s["frequency"] == "monthly"
+        else s["amount"] * 4 if s["frequency"] == "weekly"
+        else s["amount"] / 12
+        for s in subscriptions
+    )
+
+    return {
+        "subscriptions": subscriptions,
+        "monthly_total": round(monthly_total, 2),
+        "yearly_total": round(monthly_total * 12, 2),
+    }
+
+
+async def get_budgets(user_id: int = 1):
+    """Get budgets with current spending."""
+    rows = await execute_query("""
+        SELECT
+            b.budget_id,
+            c.category_name,
+            b.monthly_limit,
+            COALESCE(SUM(
+                CASE WHEN t.transaction_date >= date_trunc('month', CURRENT_DATE)
+                     AND t.status = 'completed' AND t.amount > 0
+                THEN t.amount ELSE 0 END
+            ), 0) as current_spending
+        FROM budgets b
+        JOIN categories c ON b.category_id = c.category_id
+        LEFT JOIN merchants m ON m.category_id = c.category_id
+        LEFT JOIN transactions t ON t.merchant_id = m.merchant_id
+        WHERE b.user_id = $1
+        GROUP BY b.budget_id, c.category_name, b.monthly_limit
+        ORDER BY c.category_name
+    """, user_id)
+
+    return [
+        {
+            "budget_id": r["budget_id"],
+            "category": r["category_name"],
+            "monthly_limit": float(r["monthly_limit"]),
+            "current_spending": round(float(r["current_spending"]), 2),
+            "percent_used": round(float(r["current_spending"]) / float(r["monthly_limit"]) * 100, 1) if float(r["monthly_limit"]) > 0 else 0,
+        }
+        for r in rows
+    ]
+
+
+async def get_spending_by_category_monthly():
+    """Category spending over time for analytics page."""
+    rows = await execute_query("""
+        SELECT
+            to_char(t.transaction_date, 'YYYY-MM') as month,
+            COALESCE(c.category_name, 'Uncategorized') as category,
+            SUM(t.amount) as total
+        FROM transactions t
+        LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+        LEFT JOIN categories c ON m.category_id = c.category_id
+        WHERE t.status = 'completed' AND t.amount > 0
+          AND t.transaction_date >= CURRENT_DATE - interval '12 months'
+        GROUP BY to_char(t.transaction_date, 'YYYY-MM'), c.category_name
+        ORDER BY month, total DESC
+    """)
+    return [{"month": r["month"], "category": r["category"], "total": round(float(r["total"]), 2)} for r in rows]
+
+
+async def get_data_detective():
+    """Data Detective: anomaly investigation."""
+    # Current vs previous month spending
+    current = await execute_one("""
+        SELECT COALESCE(SUM(amount), 0) as total
+        FROM transactions
+        WHERE status = 'completed' AND amount > 0
+          AND transaction_date >= date_trunc('month', CURRENT_DATE)
+    """)
+    previous = await execute_one("""
+        SELECT COALESCE(SUM(amount), 0) as total
+        FROM transactions
+        WHERE status = 'completed' AND amount > 0
+          AND transaction_date >= date_trunc('month', CURRENT_DATE) - interval '1 month'
+          AND transaction_date < date_trunc('month', CURRENT_DATE)
+    """)
+
+    current_val = float(current["total"])
+    prev_val = float(previous["total"])
+    change_pct = round(((current_val - prev_val) / prev_val) * 100, 1) if prev_val > 0 else 0
+
+    # Investigate anomalies
+    dupes = await execute_one("""
+        SELECT COUNT(*) as cnt FROM (
+            SELECT account_id, merchant_id, transaction_date, amount
+            FROM transactions
+            GROUP BY account_id, merchant_id, transaction_date, amount
+            HAVING COUNT(*) > 1
+        ) d
+    """)
+
+    missing = await execute_one(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE merchant_id IS NULL"
+    )
+
+    refunds = await execute_one(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE transaction_type = 'refund'"
+    )
+
+    bad_currency = await execute_one("""
+        SELECT COUNT(*) as cnt FROM transactions
+        WHERE currency NOT IN ('INR', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'SGD')
+    """)
+
+    return {
+        "current_month_spending": round(current_val, 2),
+        "previous_month_spending": round(prev_val, 2),
+        "change_percent": change_pct,
+        "anomalies": {
+            "duplicate_transactions": dupes["cnt"],
+            "missing_merchants": missing["cnt"],
+            "refunds": refunds["cnt"],
+            "currency_anomalies": bad_currency["cnt"],
+        },
+    }
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\services\ingestion.py ====================
+"""
+CSV ingestion service: parsing, column detection, mapping.
+"""
+
+import csv
+import io
+from datetime import datetime
+
+# FinSight canonical schema
+CANONICAL_COLUMNS = [
+    "transaction_date", "merchant", "amount", "currency",
+    "status", "transaction_type", "description"
+]
+
+# Common CSV column aliases
+COLUMN_ALIASES = {
+    "transaction_date": ["date", "transaction_date", "trans_date", "txn_date", "posting_date", "value_date"],
+    "merchant": ["merchant", "description", "merchant_name", "payee", "vendor", "name", "details", "narration", "particulars"],
+    "amount": ["amount", "value", "transaction_amount", "txn_amount", "debit", "sum", "total"],
+    "currency": ["currency", "currency_code", "ccy", "curr"],
+    "status": ["status", "transaction_status", "txn_status", "state"],
+    "transaction_type": ["type", "transaction_type", "txn_type", "dr_cr", "debit_credit"],
+    "description": ["description", "memo", "note", "remarks", "reference", "details", "narration"],
+}
+
+DATE_FORMATS = [
+    "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
+    "%d-%b-%Y", "%Y/%m/%d", "%d.%m.%Y", "%b %d, %Y", "%B %d, %Y",
+]
+
+
+def detect_columns(headers: list[str]) -> dict:
+    """Auto-detect column mapping from CSV headers to canonical schema."""
+    mapping = {}
+    headers_lower = [h.strip().lower().replace(" ", "_") for h in headers]
+
+    for canonical, aliases in COLUMN_ALIASES.items():
+        for i, header in enumerate(headers_lower):
+            if header in aliases:
+                mapping[headers[i]] = canonical
+                break
+
+    return mapping
+
+
+def parse_csv_content(content: str) -> dict:
+    """Parse CSV content and return headers, sample rows, and stats."""
+    reader = csv.reader(io.StringIO(content))
+    headers = next(reader)
+    headers = [h.strip() for h in headers]
+
+    rows = []
+    for row in reader:
+        rows.append(row)
+
+    sample = rows[:10]
+    total_rows = len(rows)
+
+    # Detect date range
+    date_col = None
+    mapping = detect_columns(headers)
+    for orig, canonical in mapping.items():
+        if canonical == "transaction_date":
+            date_col = headers.index(orig)
+            break
+
+    min_date = None
+    max_date = None
+    if date_col is not None:
+        for row in rows:
+            if date_col < len(row):
+                parsed = try_parse_date(row[date_col])
+                if parsed:
+                    if min_date is None or parsed < min_date:
+                        min_date = parsed
+                    if max_date is None or parsed > max_date:
+                        max_date = parsed
+
+    # Detect currencies
+    currencies = set()
+    currency_col = None
+    for orig, canonical in mapping.items():
+        if canonical == "currency":
+            currency_col = headers.index(orig)
+            break
+    if currency_col is not None:
+        for row in rows:
+            if currency_col < len(row) and row[currency_col].strip():
+                currencies.add(row[currency_col].strip())
+
+    return {
+        "headers": headers,
+        "sample": sample,
+        "total_rows": total_rows,
+        "mapping": mapping,
+        "date_range": {
+            "min": min_date.isoformat() if min_date else None,
+            "max": max_date.isoformat() if max_date else None,
+        },
+        "currencies": list(currencies),
+    }
+
+
+def try_parse_date(date_str: str):
+    """Try parsing a date string in multiple formats."""
+    date_str = date_str.strip()
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def apply_mapping(rows: list, headers: list, mapping: dict) -> list[dict]:
+    """Apply column mapping and return list of canonical dicts."""
+    # Reverse mapping: original header -> canonical name
+    header_to_canonical = {}
+    for orig, canonical in mapping.items():
+        idx = headers.index(orig) if orig in headers else None
+        if idx is not None:
+            header_to_canonical[idx] = canonical
+
+    result = []
+    for row in rows:
+        record = {}
+        for idx, canonical in header_to_canonical.items():
+            if idx < len(row):
+                val = row[idx].strip()
+                if canonical == "transaction_date":
+                    parsed = try_parse_date(val)
+                    record[canonical] = parsed
+                elif canonical == "amount":
+                    try:
+                        record[canonical] = float(val.replace(",", ""))
+                    except ValueError:
+                        record[canonical] = None
+                else:
+                    record[canonical] = val if val else None
+            else:
+                record[canonical] = None
+        result.append(record)
+
+    return result
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\services\llm.py ====================
+"""
+LLM service: Groq primary, Gemini fallback.
+SQL generation with guardrails.
+"""
+
+import os
+import re
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+
+GROQ_API_KEY = os.getenv("GROQ", "")
+GEMINI_API_KEY = os.getenv("GEMINI", "")
+
+# SQL guardrails: only allow these statements
+ALLOWED_KEYWORDS = {"SELECT", "WITH"}
+BLOCKED_KEYWORDS = {"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE", "GRANT", "REVOKE", "EXEC", "EXECUTE"}
+
+# Database schema for context
+SCHEMA_CONTEXT = """
+You are a SQL assistant for a personal finance analytics platform called FinSight.
+The database is PostgreSQL with these tables:
+
+users (user_id SERIAL PK, name VARCHAR, email VARCHAR, created_at TIMESTAMP)
+accounts (account_id SERIAL PK, user_id INT FK->users, account_type VARCHAR, currency VARCHAR, institution VARCHAR, created_at TIMESTAMP)
+transactions (transaction_id SERIAL PK, account_id INT FK->accounts, merchant_id INT FK->merchants, transaction_date DATE, amount NUMERIC(12,2), currency VARCHAR, status VARCHAR, transaction_type VARCHAR, description TEXT, created_at TIMESTAMP)
+merchants (merchant_id SERIAL PK, merchant_name VARCHAR, normalized_name VARCHAR, category_id INT FK->categories)
+categories (category_id SERIAL PK, category_name VARCHAR, parent_category VARCHAR)
+budgets (budget_id SERIAL PK, user_id INT FK->users, category_id INT FK->categories, monthly_limit NUMERIC(12,2))
+subscriptions (subscription_id SERIAL PK, user_id INT FK->users, merchant_id INT FK->merchants, amount NUMERIC(12,2), frequency VARCHAR, next_billing_date DATE)
+exchange_rates (id SERIAL PK, date DATE, base_currency VARCHAR, target_currency VARCHAR, rate NUMERIC(12,6))
+
+Rules:
+- Generate ONLY SELECT queries. Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE.
+- Always include a LIMIT clause (max 100 rows).
+- Use normalized_name from merchants table for merchant names.
+- Use category_name from categories table for categories.
+- For spending calculations, use amount > 0 AND status = 'completed'.
+- Amounts are in the currency column (mostly INR).
+- Return ONLY the SQL query, no explanation.
+"""
+
+
+def validate_sql(sql: str) -> tuple[bool, str]:
+    """Validate SQL query against guardrails."""
+    sql_upper = sql.upper().strip()
+
+    # Remove comments
+    sql_clean = re.sub(r'--.*$', '', sql_upper, flags=re.MULTILINE)
+    sql_clean = re.sub(r'/\*.*?\*/', '', sql_clean, flags=re.DOTALL)
+
+    # Check for blocked keywords
+    for keyword in BLOCKED_KEYWORDS:
+        pattern = r'\b' + keyword + r'\b'
+        if re.search(pattern, sql_clean):
+            return False, f"Blocked keyword found: {keyword}"
+
+    # Must start with SELECT or WITH
+    sql_trimmed = sql_clean.strip()
+    if not sql_trimmed.startswith("SELECT") and not sql_trimmed.startswith("WITH"):
+        return False, "Query must start with SELECT or WITH"
+
+    # Check tables exist
+    known_tables = {"users", "accounts", "transactions", "merchants", "categories", "budgets", "subscriptions", "exchange_rates"}
+    from_matches = re.findall(r'\bFROM\s+(\w+)', sql_clean)
+    join_matches = re.findall(r'\bJOIN\s+(\w+)', sql_clean)
+    all_tables = set(t.lower() for t in from_matches + join_matches)
+
+    # Filter out subquery aliases and CTEs
+    for table in all_tables:
+        if table not in known_tables and not table.startswith("("):
+            # Could be a CTE alias, allow it
+            pass
+
+    return True, "OK"
+
+
+def extract_sql(text: str) -> str:
+    """Extract SQL from LLM response (handles markdown code blocks)."""
+    # Try to extract from code block
+    match = re.search(r'```(?:sql)?\s*\n?(.*?)\n?```', text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    # Otherwise, try to find SELECT/WITH statement
+    match = re.search(r'((?:WITH|SELECT)\b.*?;)', text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    # Return as-is
+    return text.strip()
+
+
+async def generate_sql(question: str) -> dict:
+    """Generate SQL from natural language question using Groq (primary) or Gemini (fallback)."""
+    prompt = f"{SCHEMA_CONTEXT}\n\nUser question: {question}\n\nGenerate the SQL query:"
+
+    sql = None
+    provider = None
+    error = None
+
+    # Try Groq first
+    try:
+        sql = await _call_groq(prompt)
+        provider = "groq"
+    except Exception as e:
+        error = str(e)
+        # Fall back to Gemini
+        try:
+            sql = await _call_gemini(prompt)
+            provider = "gemini"
+            error = None
+        except Exception as e2:
+            error = f"Both LLMs failed. Groq: {error}. Gemini: {str(e2)}"
+
+    if error:
+        return {"success": False, "error": error}
+
+    sql = extract_sql(sql)
+    valid, msg = validate_sql(sql)
+
+    if not valid:
+        return {"success": False, "error": f"SQL validation failed: {msg}", "sql": sql}
+
+    return {"success": True, "sql": sql, "provider": provider}
+
+
+async def explain_result(question: str, sql: str, result: list) -> str:
+    """Generate a natural language explanation of query results."""
+    # Truncate result for context
+    result_str = str(result[:20])
+    prompt = (
+        f"The user asked: \"{question}\"\n\n"
+        f"The SQL query was:\n{sql}\n\n"
+        f"The results are:\n{result_str}\n\n"
+        f"Provide a brief, clear explanation of these results in 2-3 sentences. "
+        f"Use plain language. Mention specific numbers. Do not mention SQL."
+    )
+
+    try:
+        return await _call_groq(prompt)
+    except Exception:
+        try:
+            return await _call_gemini(prompt)
+        except Exception:
+            return "Results returned successfully."
+
+
+async def _call_groq(prompt: str) -> str:
+    """Call Groq API."""
+    from groq import AsyncGroq
+
+    client = AsyncGroq(api_key=GROQ_API_KEY)
+    response = await client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=1024,
+    )
+    return response.choices[0].message.content
+
+
+async def _call_gemini(prompt: str) -> str:
+    """Call Gemini API."""
+    from google import genai
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    response = await client.aio.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+    )
+    return response.text
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\services\validation.py ====================
+"""
+Data validation service: quality checks on imported data.
+"""
+
+from backend.db.database import execute_query, execute_one
+
+
+async def run_all_checks() -> list[dict]:
+    """Run all data quality checks and return results."""
+    checks = []
+
+    # 1. Total row count
+    row = await execute_one("SELECT COUNT(*) as cnt FROM transactions")
+    checks.append({
+        "check_name": "Total Rows",
+        "status": "info",
+        "details": f"{row['cnt']} transactions in database",
+        "affected_rows": row["cnt"],
+    })
+
+    # 2. Required columns (not null checks)
+    row = await execute_one(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE account_id IS NULL OR transaction_date IS NULL OR amount IS NULL"
+    )
+    checks.append({
+        "check_name": "Required columns (account_id, date, amount)",
+        "status": "pass" if row["cnt"] == 0 else "fail",
+        "details": f"{row['cnt']} rows missing required columns",
+        "affected_rows": row["cnt"],
+    })
+
+    # 3. Date parsing (future dates)
+    row = await execute_one(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE transaction_date > CURRENT_DATE"
+    )
+    checks.append({
+        "check_name": "Future transaction dates",
+        "status": "pass" if row["cnt"] == 0 else "warn",
+        "details": f"{row['cnt']} transactions with future dates",
+        "affected_rows": row["cnt"],
+    })
+
+    # 4. Duplicate detection
+    row = await execute_one("""
+        SELECT COUNT(*) as cnt FROM (
+            SELECT account_id, merchant_id, transaction_date, amount, currency
+            FROM transactions
+            GROUP BY account_id, merchant_id, transaction_date, amount, currency
+            HAVING COUNT(*) > 1
+        ) dupes
+    """)
+    checks.append({
+        "check_name": "Duplicate transactions",
+        "status": "pass" if row["cnt"] == 0 else "warn",
+        "details": f"{row['cnt']} groups of duplicate transactions",
+        "affected_rows": row["cnt"],
+    })
+
+    # 5. Missing merchants
+    row = await execute_one(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE merchant_id IS NULL"
+    )
+    checks.append({
+        "check_name": "Missing merchant",
+        "status": "pass" if row["cnt"] == 0 else "warn",
+        "details": f"{row['cnt']} transactions with no merchant",
+        "affected_rows": row["cnt"],
+    })
+
+    # 6. Missing categories
+    row = await execute_one("""
+        SELECT COUNT(*) as cnt FROM transactions t
+        LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+        WHERE m.category_id IS NULL AND t.merchant_id IS NOT NULL
+    """)
+    checks.append({
+        "check_name": "Missing categories",
+        "status": "pass" if row["cnt"] == 0 else "warn",
+        "details": f"{row['cnt']} transactions with uncategorized merchant",
+        "affected_rows": row["cnt"],
+    })
+
+    # 7. Invalid currencies
+    valid_currencies = {"INR", "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "SGD"}
+    rows = await execute_query(
+        "SELECT DISTINCT currency FROM transactions"
+    )
+    invalid = [r["currency"] for r in rows if r["currency"] not in valid_currencies]
+    checks.append({
+        "check_name": "Unknown currencies",
+        "status": "pass" if len(invalid) == 0 else "warn",
+        "details": f"Found currencies: {', '.join(invalid)}" if invalid else "All currencies valid",
+        "affected_rows": len(invalid),
+    })
+
+    # 8. Negative non-refund amounts
+    row = await execute_one(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE amount < 0 AND transaction_type != 'refund'"
+    )
+    checks.append({
+        "check_name": "Negative non-refund amounts",
+        "status": "pass" if row["cnt"] == 0 else "fail",
+        "details": f"{row['cnt']} transactions with negative amount that are not refunds",
+        "affected_rows": row["cnt"],
+    })
+
+    return checks
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\services\__init__.py ====================
+# services package
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\main.py ====================
+"""
+FinSight Backend — FastAPI Application
+"""
+
+import os
+import sys
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.db.database import get_pool, close_pool
+from backend.api.data import router as data_router
+from backend.api.dashboard import router as dashboard_router
+from backend.api.transactions import router as transactions_router
+from backend.api.subscriptions import router as subscriptions_router
+from backend.api.budgets import router as budgets_router
+from backend.api.ask import router as ask_router
+from backend.api.pipeline import router as pipeline_router
+from backend.api.detective import router as detective_router
+from backend.api.analytics import router as analytics_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: initialize connection pool
+    await get_pool()
+    print("Database pool initialized")
+    yield
+    # Shutdown: close pool
+    await close_pool()
+    print("Database pool closed")
+
+
+app = FastAPI(
+    title="FinSight API",
+    description="Personal finance analytics platform",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount routers
+app.include_router(data_router)
+app.include_router(dashboard_router)
+app.include_router(transactions_router)
+app.include_router(subscriptions_router)
+app.include_router(budgets_router)
+app.include_router(ask_router)
+app.include_router(pipeline_router)
+app.include_router(detective_router)
+app.include_router(analytics_router)
+
+
+@app.get("/api/v1/health")
+async def health():
+    return {"status": "healthy", "service": "finsight-api"}
+
+
+@app.get("/api/v1/categories")
+async def list_categories():
+    from backend.db.database import execute_query
+    rows = await execute_query("SELECT category_id, category_name, parent_category FROM categories ORDER BY category_name")
+    return {"categories": [dict(r) for r in rows]}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+
+==================== C:\Users\Jatin\Desktop\finsight\backend\__init__.py ====================
+# backend package
+
+==================== C:\Users\Jatin\Desktop\finsight\data_generator\generate_data.py ====================
+"""
+FinSight Messy Data Generator
+Generates 100K+ transactions with deliberate data quality issues.
+"""
+
+import csv
+import os
+import random
+from datetime import datetime, timedelta
+
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ── Configuration ──
+
+NUM_USERS = 50
+NUM_ACCOUNTS = 80
+NUM_TRANSACTIONS = 100_000
+DATE_START = datetime(2025, 1, 1)
+DATE_END = datetime(2026, 8, 31)
+
+CURRENCIES = ["INR", "USD", "EUR", "GBP"]
+INVALID_CURRENCIES = ["XYZ", "ABC", "123"]
+
+ACCOUNT_TYPES = ["savings", "checking", "credit_card", "wallet"]
+INSTITUTIONS = [
+    "HDFC Bank", "ICICI Bank", "SBI", "Axis Bank", "Kotak Mahindra",
+    "Yes Bank", "Punjab National Bank", "Bank of Baroda", "Paytm Wallet",
+    "PhonePe Wallet"
+]
+
+TRANSACTION_STATUSES = ["completed", "pending", "failed", "refunded"]
+TRANSACTION_TYPES = ["debit", "credit", "refund", "transfer"]
+
+# Merchant variations (to test normalization)
+MERCHANT_GROUPS = {
+    "Amazon": ["Amazon", "AMAZON", "Amazon.com", "AMZN", "amazon india", "Amazon IN", "AMAZON.IN"],
+    "Flipkart": ["Flipkart", "FLIPKART", "Flipkart.com", "flipkart online", "FK Retail"],
+    "Swiggy": ["Swiggy", "SWIGGY", "Swiggy Food", "swiggy delivery"],
+    "Zomato": ["Zomato", "ZOMATO", "Zomato Order", "zomato food"],
+    "Uber": ["Uber", "UBER", "Uber India", "uber ride", "Uber Trip"],
+    "Ola": ["Ola", "OLA", "Ola Cabs", "ola ride"],
+    "Netflix": ["Netflix", "NETFLIX", "Netflix Inc", "netflix subscription"],
+    "Spotify": ["Spotify", "SPOTIFY", "Spotify Premium"],
+    "Amazon Prime": ["Amazon Prime", "PRIME VIDEO", "Prime Membership"],
+    "Google": ["Google", "GOOGLE", "Google Cloud", "Google Play", "Google One"],
+    "Apple": ["Apple", "APPLE", "Apple Store", "Apple Music", "Apple iCloud"],
+    "Steam": ["Steam", "STEAM", "Steam Store", "Valve Steam"],
+    "Adobe": ["Adobe", "ADOBE", "Adobe Creative Cloud", "Adobe Inc"],
+    "Microsoft": ["Microsoft", "MICROSOFT", "Microsoft 365", "MS Office"],
+    "BigBasket": ["BigBasket", "BIGBASKET", "bigbasket.com"],
+    "Blinkit": ["Blinkit", "BLINKIT", "blinkit grocery"],
+    "Reliance": ["Reliance", "RELIANCE", "Reliance Fresh", "Reliance Digital", "JioMart"],
+    "DMart": ["DMart", "DMART", "D-Mart", "Avenue Supermarts"],
+    "Myntra": ["Myntra", "MYNTRA", "Myntra Fashion"],
+    "Croma": ["Croma", "CROMA", "Croma Electronics"],
+    "Airtel": ["Airtel", "AIRTEL", "Bharti Airtel", "airtel recharge"],
+    "Jio": ["Jio", "JIO", "Reliance Jio", "jio recharge"],
+    "BSES": ["BSES", "bses electricity", "BSES Rajdhani"],
+    "Tata Power": ["Tata Power", "TATA POWER", "tata electricity"],
+    "IRCTC": ["IRCTC", "irctc train", "Indian Railways"],
+    "MakeMyTrip": ["MakeMyTrip", "MAKEMYTRIP", "MMT"],
+    "Decathlon": ["Decathlon", "DECATHLON", "decathlon sports"],
+    "Starbucks": ["Starbucks", "STARBUCKS", "Starbucks Coffee"],
+    "McDonalds": ["McDonalds", "MCDONALDS", "McDonald's", "MCD"],
+    "PVR": ["PVR", "PVR INOX", "pvr cinemas"],
+    "Gym": ["Cult Fit", "CULT FIT", "Gold's Gym", "Fitness First"],
+    "Hospital": ["Apollo Hospital", "Max Hospital", "Fortis Hospital"],
+    "Pharmacy": ["Apollo Pharmacy", "MedPlus", "Netmeds", "PharmEasy"],
+    "Petrol": ["HP Petrol", "Indian Oil", "Bharat Petroleum", "Shell"],
+    "Rent": ["Rent Payment", "House Rent", "RENT"],
+    "ATM": ["ATM Withdrawal", "ATM Cash", "CASH WITHDRAWAL"],
+}
+
+CATEGORY_MAP = {
+    "Amazon": 4, "Flipkart": 4, "Myntra": 6, "Croma": 5,
+    "Swiggy": 3, "Zomato": 3, "Starbucks": 3, "McDonalds": 3,
+    "Uber": 10, "Ola": 10,
+    "Netflix": 12, "Spotify": 12, "Amazon Prime": 12, "Steam": 13,
+    "Google": 22, "Apple": 22, "Adobe": 22, "Microsoft": 22,
+    "BigBasket": 2, "Blinkit": 2, "Reliance": 2, "DMart": 2,
+    "Airtel": 17, "Jio": 17,
+    "BSES": 15, "Tata Power": 15,
+    "IRCTC": 23, "MakeMyTrip": 23,
+    "Decathlon": 4, "PVR": 11,
+    "Gym": 18, "Hospital": 18, "Pharmacy": 19,
+    "Petrol": 8, "Rent": 24, "ATM": 25,
+}
+
+DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%d/%m/%Y",
+    "%m-%d-%Y",
+    "%d-%b-%Y",
+    "%Y/%m/%d",
+]
+
+
+def random_date():
+    delta = DATE_END - DATE_START
+    random_days = random.randint(0, delta.days)
+    return DATE_START + timedelta(days=random_days)
+
+
+def random_amount(merchant_group):
+    """Generate realistic amounts based on merchant type."""
+    ranges = {
+        "Netflix": (149, 649), "Spotify": (59, 179), "Amazon Prime": (129, 1499),
+        "Google": (15, 250), "Apple": (79, 999), "Adobe": (675, 4900),
+        "Microsoft": (199, 5299), "Steam": (99, 3999),
+        "Amazon": (99, 25000), "Flipkart": (149, 20000), "Myntra": (299, 8000),
+        "Croma": (999, 80000),
+        "Swiggy": (80, 1500), "Zomato": (100, 2000), "Starbucks": (200, 800),
+        "McDonalds": (99, 600),
+        "Uber": (50, 1200), "Ola": (40, 1000),
+        "BigBasket": (200, 5000), "Blinkit": (50, 3000), "Reliance": (100, 8000),
+        "DMart": (200, 6000),
+        "Airtel": (149, 999), "Jio": (149, 999),
+        "BSES": (500, 5000), "Tata Power": (400, 6000),
+        "IRCTC": (200, 8000), "MakeMyTrip": (1000, 50000),
+        "Decathlon": (500, 15000), "PVR": (200, 1500),
+        "Gym": (500, 3000), "Hospital": (200, 50000), "Pharmacy": (50, 3000),
+        "Petrol": (200, 5000), "Rent": (8000, 50000), "ATM": (500, 20000),
+    }
+    low, high = ranges.get(merchant_group, (50, 5000))
+    return round(random.uniform(low, high), 2)
+
+
+def generate_users():
+    first_names = [
+        "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun",
+        "Sai", "Reyansh", "Ayaan", "Krishna", "Ishaan",
+        "Ananya", "Saanvi", "Aanya", "Isha", "Pari",
+        "Diya", "Myra", "Sara", "Aadhya", "Kiara",
+        "Rohan", "Karan", "Priya", "Neha", "Rahul",
+        "Amit", "Pooja", "Sneha", "Vikram", "Deepak",
+        "Riya", "Nisha", "Ankur", "Gaurav", "Meera",
+        "Tanvi", "Harsh", "Pallavi", "Siddharth", "Shruti",
+        "Nikhil", "Kavita", "Rajesh", "Sunita", "Mohit",
+        "Akash", "Ritika", "Varun", "Divya", "Manish"
+    ]
+    last_names = [
+        "Sharma", "Verma", "Patel", "Kumar", "Singh",
+        "Gupta", "Jain", "Agarwal", "Mehta", "Shah",
+        "Reddy", "Nair", "Iyer", "Pillai", "Rao",
+        "Chopra", "Malhotra", "Kapoor", "Bansal", "Mittal"
+    ]
+    users = []
+    for i in range(NUM_USERS):
+        first = first_names[i % len(first_names)]
+        last = random.choice(last_names)
+        users.append({
+            "user_id": i + 1,
+            "name": f"{first} {last}",
+            "email": f"{first.lower()}.{last.lower()}{i}@example.com",
+        })
+    return users
+
+
+def generate_accounts(users):
+    accounts = []
+    aid = 1
+    for user in users:
+        num_accounts = random.randint(1, 3)
+        for _ in range(num_accounts):
+            if aid > NUM_ACCOUNTS:
+                break
+            accounts.append({
+                "account_id": aid,
+                "user_id": user["user_id"],
+                "account_type": random.choice(ACCOUNT_TYPES),
+                "currency": random.choices(CURRENCIES, weights=[70, 15, 10, 5])[0],
+                "institution": random.choice(INSTITUTIONS),
+            })
+            aid += 1
+    return accounts
+
+
+def generate_merchants():
+    merchants = []
+    mid = 1
+    for group_name, variations in MERCHANT_GROUPS.items():
+        cat_id = CATEGORY_MAP.get(group_name)
+        for variation in variations:
+            merchants.append({
+                "merchant_id": mid,
+                "merchant_name": variation,
+                "normalized_name": group_name,
+                "category_id": cat_id,
+            })
+            mid += 1
+    return merchants
+
+
+def generate_transactions(accounts, merchants):
+    transactions = []
+    merchant_groups = list(MERCHANT_GROUPS.keys())
+    merchant_by_group = {}
+    for m in merchants:
+        group = m["normalized_name"]
+        if group not in merchant_by_group:
+            merchant_by_group[group] = []
+        merchant_by_group[group].append(m)
+
+    for i in range(NUM_TRANSACTIONS):
+        account = random.choice(accounts)
+        group = random.choice(merchant_groups)
+        merchant = random.choice(merchant_by_group[group])
+        date = random_date()
+        amount = random_amount(group)
+
+        # Randomly pick date format for messiness
+        date_fmt = random.choice(DATE_FORMATS)
+        date_str = date.strftime(date_fmt)
+
+        status = random.choices(
+            TRANSACTION_STATUSES,
+            weights=[85, 5, 5, 5]
+        )[0]
+
+        tx_type = "debit"
+        if status == "refunded":
+            tx_type = "refund"
+            amount = -abs(amount)
+        elif random.random() < 0.05:
+            tx_type = "credit"
+
+        currency = account["currency"]
+
+        row = {
+            "transaction_id": i + 1,
+            "account_id": account["account_id"],
+            "merchant_id": merchant["merchant_id"],
+            "transaction_date": date_str,
+            "amount": amount,
+            "currency": currency,
+            "status": status,
+            "transaction_type": tx_type,
+            "description": merchant["merchant_name"],
+        }
+        transactions.append(row)
+
+    # ── Inject messiness ──
+
+    # 2% duplicates (2000 rows)
+    num_dupes = int(NUM_TRANSACTIONS * 0.02)
+    for _ in range(num_dupes):
+        original = random.choice(transactions[:NUM_TRANSACTIONS])
+        dupe = dict(original)
+        dupe["transaction_id"] = len(transactions) + 1
+        transactions.append(dupe)
+
+    # 1% missing merchant (set to None)
+    num_missing_merchant = int(NUM_TRANSACTIONS * 0.01)
+    indices = random.sample(range(NUM_TRANSACTIONS), num_missing_merchant)
+    for idx in indices:
+        transactions[idx]["merchant_id"] = ""
+        transactions[idx]["description"] = ""
+
+    # 0.5% missing category (merchant with no category)
+    # Already handled by some merchants having None category
+
+    # 0.2% invalid currency
+    num_invalid_currency = int(NUM_TRANSACTIONS * 0.002)
+    indices = random.sample(range(NUM_TRANSACTIONS), num_invalid_currency)
+    for idx in indices:
+        transactions[idx]["currency"] = random.choice(INVALID_CURRENCIES)
+
+    # 0.1% negative amounts (not refunds)
+    num_negative = int(NUM_TRANSACTIONS * 0.001)
+    indices = random.sample(range(NUM_TRANSACTIONS), num_negative)
+    for idx in indices:
+        if transactions[idx]["transaction_type"] != "refund":
+            transactions[idx]["amount"] = -abs(transactions[idx]["amount"])
+
+    # Shuffle to mix duplicates in
+    random.shuffle(transactions)
+
+    # Re-number transaction IDs
+    for i, tx in enumerate(transactions):
+        tx["transaction_id"] = i + 1
+
+    return transactions
+
+
+def write_csv(filename, data, fieldnames):
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(data)
+    print(f"  Written {len(data)} rows to {filepath}")
+
+
+def main():
+    print("Generating FinSight demo data...")
+
+    users = generate_users()
+    write_csv("users.csv", users, ["user_id", "name", "email"])
+
+    accounts = generate_accounts(users)
+    write_csv("accounts.csv", accounts, [
+        "account_id", "user_id", "account_type", "currency", "institution"
+    ])
+
+    merchants = generate_merchants()
+    write_csv("merchants.csv", merchants, [
+        "merchant_id", "merchant_name", "normalized_name", "category_id"
+    ])
+
+    transactions = generate_transactions(accounts, merchants)
+    write_csv("transactions.csv", transactions, [
+        "transaction_id", "account_id", "merchant_id",
+        "transaction_date", "amount", "currency",
+        "status", "transaction_type", "description"
+    ])
+
+    # Generate exchange rates
+    rates = []
+    base_rates = {"USD": 83.5, "EUR": 91.2, "GBP": 106.3}
+    current = DATE_START
+    rid = 1
+    while current <= DATE_END:
+        for target, base_rate in base_rates.items():
+            jitter = random.uniform(-2.0, 2.0)
+            rates.append({
+                "id": rid,
+                "date": current.strftime("%Y-%m-%d"),
+                "base_currency": "INR",
+                "target_currency": target,
+                "rate": round(1 / (base_rate + jitter), 6),
+            })
+            rid += 1
+        current += timedelta(days=1)
+
+    write_csv("exchange_rates.csv", rates, [
+        "id", "date", "base_currency", "target_currency", "rate"
+    ])
+
+    print(f"\nDone. Total transactions: {len(transactions)}")
+    print(f"  Includes ~{int(NUM_TRANSACTIONS * 0.02)} duplicates")
+    print(f"  Includes ~{int(NUM_TRANSACTIONS * 0.01)} missing merchants")
+    print(f"  Includes ~{int(NUM_TRANSACTIONS * 0.002)} invalid currencies")
+    print(f"  Includes ~{int(NUM_TRANSACTIONS * 0.001)} negative non-refund amounts")
+
+
+if __name__ == "__main__":
+    main()
+
+==================== C:\Users\Jatin\Desktop\finsight\data_generator\seed_data.py ====================
+"""
+Seed generated CSV data into Neon PostgreSQL.
+"""
+
+import os
+import csv
+import sys
+import asyncio
+from datetime import datetime
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from backend.db.database import get_pool, close_pool, execute_command, init_schema
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%d/%m/%Y",
+    "%m-%d-%Y",
+    "%d-%b-%Y",
+    "%Y/%m/%d",
+]
+
+
+def parse_date(date_str):
+    """Try multiple date formats."""
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+async def seed():
+    print("Initializing schema...")
+    await init_schema()
+    print("Schema initialized.")
+
+    pool = await get_pool()
+
+    # Seed users
+    print("Seeding users...")
+    with open(os.path.join(DATA_DIR, "users.csv"), "r") as f:
+        reader = csv.DictReader(f)
+        async with pool.acquire() as conn:
+            for row in reader:
+                await conn.execute(
+                    "INSERT INTO users (user_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                    int(row["user_id"]), row["name"], row["email"]
+                )
+    # Reset sequence
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT setval('users_user_id_seq', (SELECT MAX(user_id) FROM users))")
+
+    # Seed accounts
+    print("Seeding accounts...")
+    with open(os.path.join(DATA_DIR, "accounts.csv"), "r") as f:
+        reader = csv.DictReader(f)
+        async with pool.acquire() as conn:
+            for row in reader:
+                await conn.execute(
+                    "INSERT INTO accounts (account_id, user_id, account_type, currency, institution) "
+                    "VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                    int(row["account_id"]), int(row["user_id"]),
+                    row["account_type"], row["currency"], row["institution"]
+                )
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT setval('accounts_account_id_seq', (SELECT MAX(account_id) FROM accounts))")
+
+    # Seed merchants
+    print("Seeding merchants...")
+    with open(os.path.join(DATA_DIR, "merchants.csv"), "r") as f:
+        reader = csv.DictReader(f)
+        async with pool.acquire() as conn:
+            for row in reader:
+                cat_id = int(row["category_id"]) if row["category_id"] else None
+                await conn.execute(
+                    "INSERT INTO merchants (merchant_id, merchant_name, normalized_name, category_id) "
+                    "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                    int(row["merchant_id"]), row["merchant_name"],
+                    row["normalized_name"], cat_id
+                )
+    async with pool.acquire() as conn:
+        await conn.execute("SELECT setval('merchants_merchant_id_seq', (SELECT MAX(merchant_id) FROM merchants))")
+
+    # Seed transactions (batch)
+    print("Seeding transactions...")
+    with open(os.path.join(DATA_DIR, "transactions.csv"), "r") as f:
+        reader = csv.DictReader(f)
+        batch = []
+        count = 0
+        async with pool.acquire() as conn:
+            for row in reader:
+                merchant_id = int(row["merchant_id"]) if row["merchant_id"] else None
+                tx_date = parse_date(row["transaction_date"])
+                if tx_date is None:
+                    continue
+
+                batch.append((
+                    int(row["account_id"]),
+                    merchant_id,
+                    tx_date,
+                    float(row["amount"]),
+                    row["currency"],
+                    row["status"],
+                    row["transaction_type"],
+                    row["description"],
+                ))
+                count += 1
+
+                if len(batch) >= 1000:
+                    await conn.executemany(
+                        "INSERT INTO transactions "
+                        "(account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                        batch
+                    )
+                    batch = []
+                    if count % 10000 == 0:
+                        print(f"  {count} transactions...")
+
+            if batch:
+                await conn.executemany(
+                    "INSERT INTO transactions "
+                    "(account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    batch
+                )
+
+    print(f"  Total: {count} transactions seeded.")
+
+    # Seed exchange rates
+    print("Seeding exchange rates...")
+    with open(os.path.join(DATA_DIR, "exchange_rates.csv"), "r") as f:
+        reader = csv.DictReader(f)
+        batch = []
+        async with pool.acquire() as conn:
+            for row in reader:
+                batch.append((
+                    datetime.strptime(row["date"], "%Y-%m-%d").date(),
+                    row["base_currency"],
+                    row["target_currency"],
+                    float(row["rate"]),
+                ))
+                if len(batch) >= 500:
+                    await conn.executemany(
+                        "INSERT INTO exchange_rates (date, base_currency, target_currency, rate) "
+                        "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                        batch
+                    )
+                    batch = []
+            if batch:
+                await conn.executemany(
+                    "INSERT INTO exchange_rates (date, base_currency, target_currency, rate) "
+                    "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                    batch
+                )
+
+    print("Done seeding.")
+    await close_pool()
+
+
+if __name__ == "__main__":
+    asyncio.run(seed())
+

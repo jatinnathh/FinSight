@@ -1,0 +1,1692 @@
+==================== C:\Users\Jatin\Desktop\finsight\app\add-data\upload\page.tsx ====================
+"use client";
+
+import { useState, useRef } from "react";
+import Link from "next/link";
+
+const CANONICAL_COLUMNS = [
+  "transaction_date",
+  "merchant",
+  "amount",
+  "currency",
+  "status",
+  "transaction_type",
+  "description",
+  "(skip)",
+];
+
+export default function UploadPage() {
+  const [step, setStep] = useState<"upload" | "map" | "validate" | "done">("upload");
+  const [csvContent, setCsvContent] = useState("");
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [sample, setSample] = useState<string[][]>([]);
+  const [totalRows, setTotalRows] = useState(0);
+  const [suggestedMapping, setSuggestedMapping] = useState<Record<string, string>>({});
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [validationResult, setValidationResult] = useState<{
+    total_rows: number;
+    valid_rows: number;
+    issues: { type: string; message: string }[];
+  } | null>(null);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [dragover, setDragover] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(file: File) {
+    setLoading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/v1/data/upload-csv", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCsvContent(await file.text());
+        setHeaders(data.headers);
+        setSample(data.sample);
+        setTotalRows(data.total_rows);
+        setSuggestedMapping(data.suggested_mapping || {});
+        setMapping(data.suggested_mapping || {});
+        setStep("map");
+      }
+    } catch {
+      // handle error
+    }
+    setLoading(false);
+  }
+
+  async function handleValidate() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/v1/data/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mapping, csv_content: csvContent }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setValidationResult(data);
+        setStep("validate");
+      }
+    } catch {
+      // handle error
+    }
+    setLoading(false);
+  }
+
+  async function handleImport() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/v1/data/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mapping, csv_content: csvContent, account_id: 1 }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setImportResult(`Imported ${data.inserted} rows. Skipped ${data.skipped}.`);
+        setStep("done");
+      }
+    } catch {
+      // handle error
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ maxWidth: 700 }}>
+      <h1 className="page-title">Upload CSV</h1>
+
+      {step === "upload" && (
+        <>
+          <div
+            className={`upload-zone${dragover ? " dragover" : ""}`}
+            onClick={() => fileRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
+            onDragLeave={() => setDragover(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragover(false);
+              const file = e.dataTransfer.files[0];
+              if (file) handleFile(file);
+            }}
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+              }}
+            />
+            <p style={{ fontSize: 14, marginBottom: 4 }}>
+              {loading ? "Uploading..." : "Drop a CSV file here, or click to browse"}
+            </p>
+            <p style={{ fontSize: 12, color: "var(--muted)" }}>
+              Supports .csv files
+            </p>
+          </div>
+        </>
+      )}
+
+      {step === "map" && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <p style={{ fontSize: 13 }}>
+              Detected {totalRows.toLocaleString()} rows with {headers.length} columns
+            </p>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-title">Column Mapping</div>
+            {headers.map((header) => (
+              <div key={header} className="mapping-row">
+                <span style={{ width: 160, fontSize: 13, fontFamily: "var(--font-mono), monospace" }}>
+                  {header}
+                </span>
+                <span className="mapping-arrow">--&gt;</span>
+                <select
+                  value={mapping[header] || "(skip)"}
+                  onChange={(e) =>
+                    setMapping((m) => ({ ...m, [header]: e.target.value }))
+                  }
+                  style={{ flex: 1 }}
+                >
+                  {CANONICAL_COLUMNS.map((col) => (
+                    <option key={col} value={col}>{col}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          {sample.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-title">Sample Data (first 5 rows)</div>
+              <div className="table-container" style={{ border: "none" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      {headers.map((h) => (
+                        <th key={h}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sample.slice(0, 5).map((row, i) => (
+                      <tr key={i}>
+                        {row.map((cell, j) => (
+                          <td key={j} style={{ fontSize: 12 }}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <button className="btn btn-primary" onClick={handleValidate} disabled={loading}>
+            {loading ? "Validating..." : "Validate Mapping"}
+          </button>
+        </>
+      )}
+
+      {step === "validate" && validationResult && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-title">Validation Result</div>
+            <div className="detective-stat">
+              <span className="label">Total rows</span>
+              <span className="value">{validationResult.total_rows.toLocaleString()}</span>
+            </div>
+            <div className="detective-stat">
+              <span className="label">Valid rows</span>
+              <span className="value">{validationResult.valid_rows.toLocaleString()}</span>
+            </div>
+          </div>
+
+          {validationResult.issues.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-title">Issues</div>
+              {validationResult.issues.map((issue, i) => (
+                <div key={i} className="check-item">
+                  <span className={`check-icon ${issue.type}`}>
+                    {issue.type === "fail" ? "x" : "!"}
+                  </span>
+                  <span>{issue.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={() => setStep("map")}>
+              Back
+            </button>
+            <button className="btn btn-primary" onClick={handleImport} disabled={loading}>
+              {loading ? "Importing..." : "Import Data"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {step === "done" && (
+        <div className="card">
+          <p style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+            {importResult}
+          </p>
+          <Link href="/dashboard" className="btn btn-primary">
+            View Dashboard
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\add-data\page.tsx ====================
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+
+export default function AddDataPage() {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function loadDemo() {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/v1/data/load-demo", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setResult(
+          `Done. ${data.total_transactions?.toLocaleString()} transactions loaded.`
+        );
+      } else {
+        setResult(`Error: ${data.detail || "Failed to load demo data"}`);
+      }
+    } catch {
+      setResult("Error: Could not connect to backend");
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Add Data</h1>
+      <p className="page-subtitle">Choose how to import your financial data</p>
+
+      <div className="source-grid">
+        <Link href="/add-data/upload" className="source-card">
+          <h3>Upload CSV</h3>
+          <p>Import transactions from a CSV file with column mapping</p>
+        </Link>
+
+        <div className="source-card" onClick={loading ? undefined : loadDemo}>
+          <h3>Demo Data</h3>
+          <p>
+            {loading
+              ? "Loading 100K transactions..."
+              : "Load sample dataset with 100K messy transactions"}
+          </p>
+        </div>
+
+        <div className="source-card" style={{ opacity: 0.4 }}>
+          <h3>REST API</h3>
+          <p>Connect via API endpoint (coming soon)</p>
+        </div>
+
+        <div className="source-card" style={{ opacity: 0.4 }}>
+          <h3>Bank Export</h3>
+          <p>Import from bank statement (coming soon)</p>
+        </div>
+      </div>
+
+      {result && (
+        <div className="card" style={{ marginTop: 24, maxWidth: 600 }}>
+          <p style={{ fontSize: 13 }}>{result}</p>
+          {result.startsWith("Done") && (
+            <Link href="/dashboard" className="btn btn-primary" style={{ marginTop: 12 }}>
+              View Dashboard
+            </Link>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\analytics\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
+
+interface MerchantItem {
+  merchant: string;
+  total: number;
+  count: number;
+}
+
+interface CategoryMonthly {
+  month: string;
+  category: string;
+  total: number;
+}
+
+export default function AnalyticsPage() {
+  const [merchants, setMerchants] = useState<MerchantItem[]>([]);
+  const [categoryData, setCategoryData] = useState<CategoryMonthly[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [mRes, cRes] = await Promise.all([
+          fetch("/api/v1/analytics/merchants?limit=15"),
+          fetch("/api/v1/analytics/category-monthly"),
+        ]);
+        if (mRes.ok) {
+          const d = await mRes.json();
+          setMerchants(d.data || []);
+        }
+        if (cRes.ok) {
+          const d = await cRes.json();
+          setCategoryData(d.data || []);
+        }
+      } catch {
+        // API not available
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  // Group category data by month for chart
+  const months = [...new Set(categoryData.map((d) => d.month))].sort();
+  const topCategories = [...new Set(categoryData.map((d) => d.category))].slice(0, 5);
+
+  const chartData = months.map((month) => {
+    const row: Record<string, string | number> = { month: month.slice(5) };
+    topCategories.forEach((cat) => {
+      const entry = categoryData.find((d) => d.month === month && d.category === cat);
+      row[cat] = entry ? entry.total : 0;
+    });
+    return row;
+  });
+
+  return (
+    <div>
+      <h1 className="page-title">Analytics</h1>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-title">Top Merchants</div>
+          <div style={{ height: 400, marginTop: 12 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={merchants} layout="vertical">
+                <CartesianGrid stroke="#eee" strokeDasharray="3 3" horizontal={false} />
+                <XAxis
+                  type="number"
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v: number) =>
+                    v >= 100000 ? `${(v / 100000).toFixed(0)}L` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)
+                  }
+                />
+                <YAxis
+                  type="category"
+                  dataKey="merchant"
+                  tick={{ fontSize: 11 }}
+                  width={100}
+                />
+                <Tooltip
+                  contentStyle={{ fontSize: 12, border: "1px solid #e0e0e0", borderRadius: 4 }}
+                />
+                <Bar dataKey="total" fill="#000" radius={[0, 2, 2, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-title">Category Spending Over Time</div>
+          <div style={{ height: 400, marginTop: 12 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                <CartesianGrid stroke="#eee" strokeDasharray="3 3" />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v: number) =>
+                    v >= 100000 ? `${(v / 100000).toFixed(0)}L` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)
+                  }
+                />
+                <Tooltip
+                  contentStyle={{ fontSize: 12, border: "1px solid #e0e0e0", borderRadius: 4 }}
+                />
+                {topCategories.map((cat, i) => (
+                  <Bar
+                    key={cat}
+                    dataKey={cat}
+                    stackId="a"
+                    fill={`hsl(0, 0%, ${20 + i * 15}%)`}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\ask\page.tsx ====================
+"use client";
+
+import { useState } from "react";
+
+interface AskResult {
+  success: boolean;
+  question?: string;
+  sql?: string;
+  results?: Record<string, unknown>[];
+  total_rows?: number;
+  explanation?: string;
+  provider?: string;
+  error?: string;
+}
+
+export default function AskPage() {
+  const [question, setQuestion] = useState("");
+  const [result, setResult] = useState<AskResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<{ q: string; r: AskResult }[]>([]);
+
+  async function handleAsk() {
+    if (!question.trim()) return;
+    setLoading(true);
+    setResult(null);
+
+    try {
+      const res = await fetch("/api/v1/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      const data: AskResult = await res.json();
+      setResult(data);
+      if (data.success) {
+        setHistory((h) => [{ q: question, r: data }, ...h]);
+      }
+    } catch {
+      setResult({ success: false, error: "Could not connect to backend" });
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div className="chat-container">
+      <h1 className="page-title">Ask FinSight</h1>
+      <p className="page-subtitle">
+        Ask questions about your finances in plain English
+      </p>
+
+      <div className="chat-input-row">
+        <input
+          type="text"
+          placeholder="Where did I spend the most last month?"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAsk()}
+        />
+        <button
+          className="btn btn-primary"
+          onClick={handleAsk}
+          disabled={loading || !question.trim()}
+        >
+          {loading ? "..." : "Ask"}
+        </button>
+      </div>
+
+      {result && (
+        <div className="chat-result">
+          {result.success ? (
+            <>
+              <div className="chat-section">
+                <div className="chat-section-title">Answer</div>
+                <p style={{ fontSize: 13, margin: 0, lineHeight: 1.6 }}>
+                  {result.explanation}
+                </p>
+              </div>
+
+              {result.results && result.results.length > 0 && (
+                <div className="chat-section">
+                  <div className="chat-section-title">
+                    Results ({result.total_rows} rows)
+                  </div>
+                  <div className="table-container" style={{ border: "none", maxHeight: 300, overflow: "auto" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          {Object.keys(result.results[0]).map((key) => (
+                            <th key={key}>{key}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.results.slice(0, 20).map((row, i) => (
+                          <tr key={i}>
+                            {Object.values(row).map((val, j) => (
+                              <td key={j} style={{ fontSize: 12 }}>
+                                {val === null ? "-" : String(val)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="chat-section">
+                <div className="chat-section-title">Generated SQL</div>
+                <div className="sql-block">{result.sql}</div>
+              </div>
+
+              <div className="chat-section" style={{ fontSize: 11, color: "var(--muted)" }}>
+                Provider: {result.provider}
+              </div>
+            </>
+          ) : (
+            <div className="chat-section">
+              <p style={{ fontSize: 13, margin: 0 }}>Error: {result.error}</p>
+              {result.sql && (
+                <>
+                  <div className="chat-section-title" style={{ marginTop: 12 }}>
+                    Generated SQL
+                  </div>
+                  <div className="sql-block">{result.sql}</div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {history.length > 1 && (
+        <div style={{ marginTop: 32 }}>
+          <div className="card-title">Previous Questions</div>
+          {history.slice(1).map((h, i) => (
+            <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
+              <span style={{ color: "var(--muted)" }}>Q:</span> {h.q}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\budgets\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+
+interface Budget {
+  budget_id: number;
+  category: string;
+  monthly_limit: number;
+  current_spending: number;
+  percent_used: number;
+}
+
+interface Category {
+  category_id: number;
+  category_name: string;
+}
+
+export default function BudgetsPage() {
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [newCategoryId, setNewCategoryId] = useState("");
+  const [newLimit, setNewLimit] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    try {
+      const [bRes, cRes] = await Promise.all([
+        fetch("/api/v1/budgets"),
+        fetch("/api/v1/categories"),
+      ]);
+      if (bRes.ok) {
+        const d = await bRes.json();
+        setBudgets(d.budgets || []);
+      }
+      if (cRes.ok) {
+        const d = await cRes.json();
+        setCategories(d.categories || []);
+      }
+    } catch {
+      // API not available
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function addBudget() {
+    if (!newCategoryId || !newLimit) return;
+    try {
+      await fetch("/api/v1/budgets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category_id: parseInt(newCategoryId),
+          monthly_limit: parseFloat(newLimit),
+        }),
+      });
+      setNewCategoryId("");
+      setNewLimit("");
+      setLoading(true);
+      load();
+    } catch {
+      // handle error
+    }
+  }
+
+  async function deleteBudget(id: number) {
+    try {
+      await fetch(`/api/v1/budgets/${id}`, { method: "DELETE" });
+      setLoading(true);
+      load();
+    } catch {
+      // handle error
+    }
+  }
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      <h1 className="page-title">Budgets</h1>
+      <p className="page-subtitle">Set monthly spending limits by category</p>
+
+      {budgets.length > 0 && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          {budgets.map((b) => (
+            <div key={b.budget_id} style={{ padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{b.category}</span>
+                <span style={{ fontSize: 12, fontFamily: "var(--font-mono), monospace" }}>
+                  {b.current_spending.toLocaleString()} / {b.monthly_limit.toLocaleString()}
+                </span>
+              </div>
+              <div className="progress-bar">
+                <div
+                  className={`progress-fill${b.percent_used > 90 ? " danger" : b.percent_used > 70 ? " warning" : ""}`}
+                  style={{ width: `${Math.min(100, b.percent_used)}%` }}
+                />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                  {b.percent_used}% used
+                  {b.percent_used > 90 ? " -- approaching limit" : ""}
+                </span>
+                <button
+                  onClick={() => deleteBudget(b.budget_id)}
+                  style={{ fontSize: 11, color: "var(--muted)", background: "none", border: "none", cursor: "pointer" }}
+                >
+                  remove
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-title">Add Budget</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "end", marginTop: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>Category</label>
+            <select
+              value={newCategoryId}
+              onChange={(e) => setNewCategoryId(e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <option value="">Select...</option>
+              {categories.map((c) => (
+                <option key={c.category_id} value={c.category_id}>
+                  {c.category_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--muted)", display: "block", marginBottom: 4 }}>Monthly Limit</label>
+            <input
+              type="number"
+              value={newLimit}
+              onChange={(e) => setNewLimit(e.target.value)}
+              placeholder="10000"
+              style={{ width: 120 }}
+            />
+          </div>
+          <button className="btn btn-primary" onClick={addBudget}>
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\components\Sidebar.tsx ====================
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const NAV_ITEMS = [
+  { section: "Overview" },
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/transactions", label: "Transactions" },
+  { href: "/analytics", label: "Analytics" },
+  { section: "Manage" },
+  { href: "/add-data", label: "Add Data" },
+  { href: "/budgets", label: "Budgets" },
+  { href: "/subscriptions", label: "Subscriptions" },
+  { section: "Intelligence" },
+  { href: "/ask", label: "Ask FinSight" },
+  { href: "/data-detective", label: "Data Detective" },
+  { section: "System" },
+  { href: "/data-quality", label: "Data Quality" },
+  { href: "/pipeline", label: "Pipeline" },
+];
+
+export default function Sidebar() {
+  const pathname = usePathname();
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-logo">FinSight</div>
+      <nav className="sidebar-nav">
+        {NAV_ITEMS.map((item, i) => {
+          if ("section" in item && item.section) {
+            return (
+              <div key={i} className="sidebar-section">
+                {item.section}
+              </div>
+            );
+          }
+          const isActive =
+            pathname === item.href ||
+            (item.href && item.href !== "/" && pathname?.startsWith(item.href));
+          return (
+            <Link
+              key={item.href}
+              href={item.href || "/"}
+              className={`sidebar-link${isActive ? " active" : ""}`}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\dashboard\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
+} from "recharts";
+
+interface Overview {
+  total_spending: number;
+  total_transactions: number;
+  avg_transaction: number;
+  prev_month_spending: number;
+  change_percent: number;
+  subscription_total: number;
+}
+
+interface SpendingMonth {
+  month: string;
+  spending: number;
+}
+
+interface CategoryItem {
+  category: string;
+  total: number;
+  count: number;
+}
+
+export default function DashboardPage() {
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [spending, setSpending] = useState<SpendingMonth[]>([]);
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [ovRes, spRes, catRes] = await Promise.all([
+          fetch("/api/v1/dashboard/overview"),
+          fetch("/api/v1/dashboard/spending-over-time?months=12"),
+          fetch("/api/v1/dashboard/top-categories?limit=8"),
+        ]);
+        if (ovRes.ok) setOverview(await ovRes.json());
+        if (spRes.ok) {
+          const d = await spRes.json();
+          setSpending(d.data || []);
+        }
+        if (catRes.ok) {
+          const d = await catRes.json();
+          setCategories(d.data || []);
+        }
+      } catch {
+        // API not available
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  if (!overview || overview.total_transactions === 0) {
+    return (
+      <div className="empty-state">
+        <h3>No data yet</h3>
+        <p>Import your financial data to see analytics.</p>
+        <a href="/add-data" className="btn btn-primary">
+          Add Data
+        </a>
+      </div>
+    );
+  }
+
+  const maxCategory = categories.length > 0 ? categories[0].total : 1;
+
+  return (
+    <div>
+      <h1 className="page-title">Dashboard</h1>
+      <p className="page-subtitle">This month</p>
+
+      <div className="metrics-grid">
+        <div className="card">
+          <div className="card-title">Total Spending</div>
+          <div className="card-value">
+            {formatCurrency(overview.total_spending)}
+          </div>
+          <div
+            className={`card-change ${overview.change_percent >= 0 ? "positive" : "negative"}`}
+          >
+            {overview.change_percent >= 0 ? "+" : ""}
+            {overview.change_percent}% vs last month
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-title">Avg Transaction</div>
+          <div className="card-value">
+            {formatCurrency(overview.avg_transaction)}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-title">Transactions</div>
+          <div className="card-value">
+            {overview.total_transactions.toLocaleString()}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-title">Subscriptions</div>
+          <div className="card-value">
+            {formatCurrency(overview.subscription_total)}
+          </div>
+          <div className="card-change">/month</div>
+        </div>
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-title">Spending Over Time</div>
+          <div style={{ height: 260, marginTop: 12 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={spending}>
+                <CartesianGrid stroke="#eee" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="month"
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v: string) => v.slice(5)}
+                />
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={(v: number) =>
+                    v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
+                  }
+                />
+                <Tooltip
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(v: any) => [formatCurrency(Number(v)), "Spending"]}
+                  contentStyle={{
+                    fontSize: 12,
+                    border: "1px solid #e0e0e0",
+                    borderRadius: 4,
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="spending"
+                  stroke="#000"
+                  strokeWidth={1.5}
+                  dot={{ r: 2 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-title">Top Categories</div>
+          <div style={{ marginTop: 12 }}>
+            {categories.map((cat) => (
+              <div
+                key={cat.category}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "6px 0",
+                }}
+              >
+                <span style={{ fontSize: 13, width: 120, flexShrink: 0 }}>
+                  {cat.category}
+                </span>
+                <div
+                  style={{
+                    flex: 1,
+                    height: 6,
+                    background: "#f0f0f0",
+                    borderRadius: 3,
+                  }}
+                >
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${(cat.total / maxCategory) * 100}%`,
+                      background: "#000",
+                      borderRadius: 3,
+                    }}
+                  />
+                </div>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontFamily: "var(--font-mono), monospace",
+                    width: 80,
+                    textAlign: "right",
+                  }}
+                >
+                  {formatCurrency(cat.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatCurrency(n: number): string {
+  if (n >= 10000000) return `${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\data-detective\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+
+interface DetectiveData {
+  current_month_spending: number;
+  previous_month_spending: number;
+  change_percent: number;
+  anomalies: {
+    duplicate_transactions: number;
+    missing_merchants: number;
+    refunds: number;
+    currency_anomalies: number;
+  };
+}
+
+export default function DataDetectivePage() {
+  const [data, setData] = useState<DetectiveData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/v1/detective");
+        if (res.ok) {
+          setData(await res.json());
+        }
+      } catch {
+        // API not available
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  if (!data) {
+    return (
+      <div>
+        <h1 className="page-title">Data Detective</h1>
+        <div className="empty-state">
+          <h3>No data to investigate</h3>
+          <p>Import data first to run anomaly detection</p>
+        </div>
+      </div>
+    );
+  }
+
+  const hasAnomaly = Math.abs(data.change_percent) > 30;
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      <h1 className="page-title">Data Detective</h1>
+
+      {hasAnomaly && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-title">
+            ! Spending {data.change_percent > 0 ? "increased" : "decreased"}{" "}
+            {Math.abs(data.change_percent)}% this month
+          </div>
+          <div style={{ display: "flex", gap: 24, margin: "12px 0" }}>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>Previous Month</div>
+              <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
+                {data.previous_month_spending.toLocaleString()}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>Current Month</div>
+              <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-mono), monospace" }}>
+                {data.current_month_spending.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div className="card-title">Investigating...</div>
+        <div className="detective-stat">
+          <span className="label">Duplicate transactions</span>
+          <span className="value">{data.anomalies.duplicate_transactions.toLocaleString()}</span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Missing merchants</span>
+          <span className="value">{data.anomalies.missing_merchants.toLocaleString()}</span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Refunds</span>
+          <span className="value">{data.anomalies.refunds.toLocaleString()}</span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Currency anomalies</span>
+          <span className="value">{data.anomalies.currency_anomalies.toLocaleString()}</span>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Root Cause Analysis</div>
+        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+          {data.anomalies.duplicate_transactions > 0 && (
+            <p>
+              {data.anomalies.duplicate_transactions.toLocaleString()} duplicate
+              transaction groups detected during ingestion. These records share
+              identical account, merchant, date, and amount values.
+            </p>
+          )}
+          {data.anomalies.missing_merchants > 0 && (
+            <p>
+              {data.anomalies.missing_merchants.toLocaleString()} transactions
+              have no associated merchant. These require manual categorization
+              or merchant normalization.
+            </p>
+          )}
+          {data.anomalies.currency_anomalies > 0 && (
+            <p>
+              {data.anomalies.currency_anomalies.toLocaleString()} transactions
+              use unrecognized currency codes. These should be mapped to
+              standard ISO 4217 codes.
+            </p>
+          )}
+          {data.anomalies.duplicate_transactions === 0 &&
+            data.anomalies.missing_merchants === 0 &&
+            data.anomalies.currency_anomalies === 0 && (
+              <p>No significant anomalies detected. Data quality is clean.</p>
+            )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\data-quality\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+
+interface Check {
+  check_name: string;
+  status: string;
+  details: string;
+  affected_rows: number;
+}
+
+export default function DataQualityPage() {
+  const [checks, setChecks] = useState<Check[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/v1/data/quality");
+        if (res.ok) {
+          const data = await res.json();
+          setChecks(data.checks || []);
+        }
+      } catch {
+        // API not available
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  const passed = checks.filter((c) => c.status === "pass").length;
+  const warned = checks.filter((c) => c.status === "warn").length;
+  const failed = checks.filter((c) => c.status === "fail").length;
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      <h1 className="page-title">Data Quality</h1>
+
+      <div className="metrics-grid" style={{ marginBottom: 24 }}>
+        <div className="card">
+          <div className="card-title">Passed</div>
+          <div className="card-value">{passed}</div>
+        </div>
+        <div className="card">
+          <div className="card-title">Warnings</div>
+          <div className="card-value">{warned}</div>
+        </div>
+        <div className="card">
+          <div className="card-title">Failed</div>
+          <div className="card-value">{failed}</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">Check Results</div>
+        {checks.map((check, i) => (
+          <div key={i} className="check-item">
+            <span className={`check-icon ${check.status}`}>
+              {check.status === "pass"
+                ? "v"
+                : check.status === "warn"
+                  ? "!"
+                  : check.status === "fail"
+                    ? "x"
+                    : "-"}
+            </span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 500 }}>{check.check_name}</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                {check.details}
+              </div>
+            </div>
+            {check.affected_rows > 0 && check.status !== "info" && (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono), monospace",
+                  color: "var(--muted)",
+                }}
+              >
+                {check.affected_rows}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\pipeline\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+
+interface PipelineStatus {
+  status: string;
+  run_id?: number;
+  started_at?: string;
+  finished_at?: string;
+  rows_processed?: number;
+  rows_rejected?: number;
+  error_message?: string;
+  execution_time?: string;
+  steps?: { name: string; status: string; time: string }[];
+  message?: string;
+}
+
+export default function PipelinePage() {
+  const [pipeline, setPipeline] = useState<PipelineStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/v1/pipeline/status");
+        if (res.ok) {
+          setPipeline(await res.json());
+        }
+      } catch {
+        // API not available
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  if (!pipeline || pipeline.status === "no_runs") {
+    return (
+      <div>
+        <h1 className="page-title">Pipeline</h1>
+        <div className="empty-state">
+          <h3>No pipeline runs yet</h3>
+          <p>Pipeline status will appear here after data processing</p>
+        </div>
+      </div>
+    );
+  }
+
+  const isHealthy = pipeline.status === "completed" || pipeline.status === "success";
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      <h1 className="page-title">Pipeline</h1>
+
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div className="card-title" style={{ margin: 0 }}>
+            Status
+          </div>
+          <span className={`badge ${isHealthy ? "pass" : "fail"}`}>
+            {pipeline.status?.toUpperCase()}
+          </span>
+        </div>
+
+        <div className="detective-stat">
+          <span className="label">Run ID</span>
+          <span className="value">{pipeline.run_id}</span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Started</span>
+          <span className="value">
+            {pipeline.started_at ? new Date(pipeline.started_at).toLocaleString() : "-"}
+          </span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Finished</span>
+          <span className="value">
+            {pipeline.finished_at ? new Date(pipeline.finished_at).toLocaleString() : "-"}
+          </span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Execution Time</span>
+          <span className="value">{pipeline.execution_time || "-"}</span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Rows Processed</span>
+          <span className="value">{pipeline.rows_processed?.toLocaleString() || 0}</span>
+        </div>
+        <div className="detective-stat">
+          <span className="label">Rows Rejected</span>
+          <span className="value">{pipeline.rows_rejected?.toLocaleString() || 0}</span>
+        </div>
+      </div>
+
+      {pipeline.error_message && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-title">Error</div>
+          <div className="sql-block">{pipeline.error_message}</div>
+        </div>
+      )}
+
+      {pipeline.steps && Array.isArray(pipeline.steps) && pipeline.steps.length > 0 && (
+        <div className="card">
+          <div className="card-title">Steps</div>
+          {pipeline.steps.map((step, i) => (
+            <div key={i} className="pipeline-step">
+              <span className="time">{step.time}</span>
+              <span className="icon">
+                {step.status === "completed" ? "v" : step.status === "failed" ? "x" : "..."}
+              </span>
+              <span>{step.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\subscriptions\page.tsx ====================
+"use client";
+
+import { useEffect, useState } from "react";
+
+interface Subscription {
+  merchant: string;
+  amount: number;
+  frequency: string;
+  occurrences: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export default function SubscriptionsPage() {
+  const [subs, setSubs] = useState<Subscription[]>([]);
+  const [monthlyTotal, setMonthlyTotal] = useState(0);
+  const [yearlyTotal, setYearlyTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/v1/subscriptions");
+        if (res.ok) {
+          const data = await res.json();
+          setSubs(data.subscriptions || []);
+          setMonthlyTotal(data.monthly_total || 0);
+          setYearlyTotal(data.yearly_total || 0);
+        }
+      } catch {
+        // API not available
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  if (loading) return <div className="loading">Loading...</div>;
+
+  return (
+    <div>
+      <h1 className="page-title">Subscriptions</h1>
+      <p className="page-subtitle">Automatically detected recurring payments</p>
+
+      <div className="metrics-grid" style={{ maxWidth: 400, marginBottom: 24 }}>
+        <div className="card">
+          <div className="card-title">Monthly</div>
+          <div className="card-value">{monthlyTotal.toLocaleString()}</div>
+        </div>
+        <div className="card">
+          <div className="card-title">Yearly</div>
+          <div className="card-value">{yearlyTotal.toLocaleString()}</div>
+        </div>
+      </div>
+
+      {subs.length > 0 ? (
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Merchant</th>
+                <th style={{ textAlign: "right" }}>Amount</th>
+                <th>Frequency</th>
+                <th style={{ textAlign: "right" }}>Occurrences</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subs.map((s) => (
+                <tr key={s.merchant}>
+                  <td style={{ fontWeight: 500 }}>{s.merchant}</td>
+                  <td className="amount">{s.amount.toLocaleString()}</td>
+                  <td>
+                    <span className="badge">{s.frequency}</span>
+                  </td>
+                  <td className="amount">{s.occurrences}</td>
+                  <td style={{ fontSize: 12, color: "var(--muted)" }}>{s.first_seen}</td>
+                  <td style={{ fontSize: 12, color: "var(--muted)" }}>{s.last_seen}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="empty-state">
+          <h3>No subscriptions detected</h3>
+          <p>Import transaction data to detect recurring payments</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\transactions\page.tsx ====================
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+
+interface Transaction {
+  id: number;
+  date: string;
+  merchant: string;
+  category: string;
+  amount: number;
+  currency: string;
+  status: string;
+  type: string;
+}
+
+export default function TransactionsPage() {
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [sortBy, setSortBy] = useState("transaction_date");
+  const [sortOrder, setSortOrder] = useState("desc");
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams({
+      page: String(page),
+      per_page: "50",
+      sort_by: sortBy,
+      sort_order: sortOrder,
+    });
+    if (search) params.set("search", search);
+    if (statusFilter) params.set("status", statusFilter);
+
+    try {
+      const res = await fetch(`/api/v1/transactions?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTransactions(data.transactions || []);
+        setTotal(data.total || 0);
+        setTotalPages(data.total_pages || 1);
+      }
+    } catch {
+      // API not available
+    }
+    setLoading(false);
+  }, [page, search, statusFilter, sortBy, sortOrder]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  function handleSort(col: string) {
+    if (sortBy === col) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(col);
+      setSortOrder("desc");
+    }
+    setPage(1);
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Transactions</h1>
+
+      <div className="filters-row">
+        <input
+          type="search"
+          placeholder="Search merchants..."
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          style={{ width: 220 }}
+        />
+        <select
+          value={statusFilter}
+          onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+        >
+          <option value="">All Status</option>
+          <option value="completed">Completed</option>
+          <option value="pending">Pending</option>
+          <option value="failed">Failed</option>
+          <option value="refunded">Refunded</option>
+        </select>
+        <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: "auto" }}>
+          {total.toLocaleString()} transactions
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="loading">Loading...</div>
+      ) : (
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th onClick={() => handleSort("transaction_date")}>
+                  Date {sortBy === "transaction_date" ? (sortOrder === "asc" ? "^" : "v") : ""}
+                </th>
+                <th onClick={() => handleSort("merchant")}>Merchant</th>
+                <th>Category</th>
+                <th onClick={() => handleSort("amount")} style={{ textAlign: "right" }}>
+                  Amount {sortBy === "amount" ? (sortOrder === "asc" ? "^" : "v") : ""}
+                </th>
+                <th onClick={() => handleSort("status")}>Status</th>
+                <th>Type</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((tx) => (
+                <tr key={tx.id}>
+                  <td style={{ fontFamily: "var(--font-mono), monospace", fontSize: 12 }}>
+                    {tx.date}
+                  </td>
+                  <td>{tx.merchant}</td>
+                  <td style={{ color: "var(--muted)" }}>{tx.category}</td>
+                  <td className={`amount${tx.amount < 0 ? " negative" : ""}`}>
+                    {tx.currency === "INR" ? "" : tx.currency + " "}
+                    {Math.abs(tx.amount).toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </td>
+                  <td>
+                    <span className={`badge ${tx.status}`}>{tx.status}</span>
+                  </td>
+                  <td style={{ fontSize: 12, color: "var(--muted)" }}>{tx.type}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="pagination">
+            <span>
+              Page {page} of {totalPages}
+            </span>
+            <div className="pagination-buttons">
+              <button
+                className="btn"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                style={{ padding: "4px 10px", fontSize: 12 }}
+              >
+                Prev
+              </button>
+              <button
+                className="btn"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                style={{ padding: "4px 10px", fontSize: 12 }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\layout.tsx ====================
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+import Sidebar from "./components/Sidebar";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "FinSight - Personal Finance Analytics",
+  description:
+    "Personal finance analytics platform with data engineering pipeline, SQL analytics, and AI-powered insights.",
+};
+
+export default function RootLayout({ children }: LayoutProps<"/">) {
+  return (
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex">
+        <Sidebar />
+        <main className="main-content">{children}</main>
+      </body>
+    </html>
+  );
+}
+
+==================== C:\Users\Jatin\Desktop\finsight\app\page.tsx ====================
+import { redirect } from "next/navigation";
+
+export default function Home() {
+  redirect("/dashboard");
+}
+

@@ -1,0 +1,669 @@
+==================== C:\Users\Jatin\Desktop\finsight\backend\db\schema.sql ====================
+-- FinSight Database Schema
+-- PostgreSQL on Neon
+
+-- Drop tables if they exist (for clean re-creation)
+DROP TABLE IF EXISTS exchange_rates CASCADE;
+DROP TABLE IF EXISTS subscriptions CASCADE;
+DROP TABLE IF EXISTS budgets CASCADE;
+DROP TABLE IF EXISTS transactions CASCADE;
+DROP TABLE IF EXISTS merchants CASCADE;
+DROP TABLE IF EXISTS categories CASCADE;
+DROP TABLE IF EXISTS accounts CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS pipeline_runs CASCADE;
+DROP TABLE IF EXISTS data_quality_results CASCADE;
+
+-- Users
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Categories
+CREATE TABLE categories (
+    category_id SERIAL PRIMARY KEY,
+    category_name VARCHAR(100) NOT NULL,
+    parent_category VARCHAR(100)
+);
+
+-- Accounts
+CREATE TABLE accounts (
+    account_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    account_type VARCHAR(50) NOT NULL,
+    currency VARCHAR(10) DEFAULT 'INR',
+    institution VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Merchants
+CREATE TABLE merchants (
+    merchant_id SERIAL PRIMARY KEY,
+    merchant_name VARCHAR(255) NOT NULL,
+    normalized_name VARCHAR(255),
+    category_id INTEGER REFERENCES categories(category_id)
+);
+
+-- Transactions
+CREATE TABLE transactions (
+    transaction_id SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    merchant_id INTEGER REFERENCES merchants(merchant_id),
+    transaction_date DATE NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL,
+    currency VARCHAR(10) DEFAULT 'INR',
+    status VARCHAR(20) DEFAULT 'completed',
+    transaction_type VARCHAR(20) DEFAULT 'debit',
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Budgets
+CREATE TABLE budgets (
+    budget_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories(category_id),
+    monthly_limit NUMERIC(12, 2) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Subscriptions
+CREATE TABLE subscriptions (
+    subscription_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    merchant_id INTEGER NOT NULL REFERENCES merchants(merchant_id),
+    amount NUMERIC(12, 2) NOT NULL,
+    frequency VARCHAR(20) DEFAULT 'monthly',
+    next_billing_date DATE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Exchange Rates
+CREATE TABLE exchange_rates (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    base_currency VARCHAR(10) NOT NULL,
+    target_currency VARCHAR(10) NOT NULL,
+    rate NUMERIC(12, 6) NOT NULL,
+    UNIQUE(date, base_currency, target_currency)
+);
+
+-- Pipeline Runs (for pipeline status UI)
+CREATE TABLE pipeline_runs (
+    run_id SERIAL PRIMARY KEY,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP,
+    status VARCHAR(20) DEFAULT 'running',
+    rows_processed INTEGER DEFAULT 0,
+    rows_rejected INTEGER DEFAULT 0,
+    error_message TEXT,
+    steps JSONB DEFAULT '[]'
+);
+
+-- Data Quality Results
+CREATE TABLE data_quality_results (
+    result_id SERIAL PRIMARY KEY,
+    run_id INTEGER REFERENCES pipeline_runs(run_id),
+    check_name VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    details TEXT,
+    affected_rows INTEGER DEFAULT 0,
+    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes
+CREATE INDEX idx_transactions_account ON transactions(account_id);
+CREATE INDEX idx_transactions_merchant ON transactions(merchant_id);
+CREATE INDEX idx_transactions_date ON transactions(transaction_date);
+CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_transactions_type ON transactions(transaction_type);
+CREATE INDEX idx_accounts_user ON accounts(user_id);
+CREATE INDEX idx_merchants_category ON merchants(category_id);
+CREATE INDEX idx_merchants_normalized ON merchants(normalized_name);
+CREATE INDEX idx_budgets_user ON budgets(user_id);
+CREATE INDEX idx_subscriptions_user ON subscriptions(user_id);
+CREATE INDEX idx_exchange_rates_date ON exchange_rates(date);
+CREATE INDEX idx_pipeline_runs_status ON pipeline_runs(status);
+
+-- Seed categories
+INSERT INTO categories (category_name, parent_category) VALUES
+    ('Food', NULL),
+    ('Groceries', 'Food'),
+    ('Restaurants', 'Food'),
+    ('Shopping', NULL),
+    ('Electronics', 'Shopping'),
+    ('Clothing', 'Shopping'),
+    ('Transport', NULL),
+    ('Fuel', 'Transport'),
+    ('Public Transit', 'Transport'),
+    ('Ride Sharing', 'Transport'),
+    ('Entertainment', NULL),
+    ('Streaming', 'Entertainment'),
+    ('Gaming', 'Entertainment'),
+    ('Utilities', NULL),
+    ('Electricity', 'Utilities'),
+    ('Internet', 'Utilities'),
+    ('Mobile', 'Utilities'),
+    ('Health', NULL),
+    ('Pharmacy', 'Health'),
+    ('Insurance', 'Health'),
+    ('Education', NULL),
+    ('Subscriptions', NULL),
+    ('Travel', NULL),
+    ('Rent', NULL),
+    ('Other', NULL);
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\advanced_window_functions.sql ====================
+-- Advanced Window Functions Demonstration
+-- LAG, LEAD, ROW_NUMBER, RANK, DENSE_RANK, SUM OVER, AVG OVER
+
+-- 1. LAG and LEAD: Month-over-month spending with previous and next month
+WITH monthly_spending AS (
+    SELECT
+        a.user_id,
+        to_char(t.transaction_date, 'YYYY-MM') AS month,
+        SUM(t.amount) AS spending
+    FROM transactions t
+    JOIN accounts a ON t.account_id = a.account_id
+    WHERE t.status = 'completed' AND t.amount > 0
+    GROUP BY a.user_id, to_char(t.transaction_date, 'YYYY-MM')
+)
+SELECT
+    user_id,
+    month,
+    spending,
+    LAG(spending) OVER (PARTITION BY user_id ORDER BY month) AS previous_month,
+    LEAD(spending) OVER (PARTITION BY user_id ORDER BY month) AS next_month,
+    spending - LAG(spending) OVER (PARTITION BY user_id ORDER BY month) AS change_from_previous
+FROM monthly_spending
+ORDER BY user_id, month
+LIMIT 100;
+
+-- 2. ROW_NUMBER: Rank transactions within each account
+SELECT
+    transaction_id,
+    account_id,
+    transaction_date,
+    amount,
+    ROW_NUMBER() OVER (
+        PARTITION BY account_id
+        ORDER BY amount DESC
+    ) AS row_num
+FROM transactions
+WHERE status = 'completed' AND amount > 0
+LIMIT 100;
+
+-- 3. RANK and DENSE_RANK: Rank merchants by spending
+SELECT
+    m.normalized_name AS merchant,
+    SUM(t.amount) AS total_spending,
+    RANK() OVER (ORDER BY SUM(t.amount) DESC) AS rank,
+    DENSE_RANK() OVER (ORDER BY SUM(t.amount) DESC) AS dense_rank
+FROM transactions t
+JOIN merchants m ON t.merchant_id = m.merchant_id
+WHERE t.status = 'completed' AND t.amount > 0
+GROUP BY m.normalized_name
+ORDER BY rank
+LIMIT 50;
+
+-- 4. SUM OVER: Running total by user
+SELECT
+    a.user_id,
+    t.transaction_date,
+    t.amount,
+    SUM(t.amount) OVER (
+        PARTITION BY a.user_id
+        ORDER BY t.transaction_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS running_total
+FROM transactions t
+JOIN accounts a ON t.account_id = a.account_id
+WHERE t.status = 'completed' AND t.amount > 0
+ORDER BY a.user_id, t.transaction_date
+LIMIT 100;
+
+-- 5. AVG OVER: Moving average (7-day)
+SELECT
+    transaction_date,
+    amount,
+    ROUND(
+        AVG(amount) OVER (
+            ORDER BY transaction_date
+            ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+        ), 2
+    ) AS moving_avg_7day
+FROM transactions
+WHERE status = 'completed' AND amount > 0
+ORDER BY transaction_date
+LIMIT 100;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\category_spending_changes.sql ====================
+-- Category spending changes: detect significant category shifts
+WITH monthly_category AS (
+    SELECT
+        to_char(t.transaction_date, 'YYYY-MM') AS month,
+        c.category_name,
+        SUM(t.amount) AS spending
+    FROM transactions t
+    JOIN merchants m ON t.merchant_id = m.merchant_id
+    JOIN categories c ON m.category_id = c.category_id
+    WHERE t.status = 'completed' AND t.amount > 0
+    GROUP BY to_char(t.transaction_date, 'YYYY-MM'), c.category_name
+)
+SELECT
+    month,
+    category_name,
+    spending,
+    LAG(spending) OVER (PARTITION BY category_name ORDER BY month) AS prev_spending,
+    spending - LAG(spending) OVER (PARTITION BY category_name ORDER BY month) AS change,
+    ROUND(
+        (spending - LAG(spending) OVER (PARTITION BY category_name ORDER BY month))
+        / NULLIF(LAG(spending) OVER (PARTITION BY category_name ORDER BY month), 0) * 100, 1
+    ) AS change_percent
+FROM monthly_category
+ORDER BY month DESC, ABS(spending - COALESCE(LAG(spending) OVER (PARTITION BY category_name ORDER BY month), spending)) DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\currency_normalized_spending.sql ====================
+-- Currency-normalized spending: convert all amounts to INR
+WITH inr_transactions AS (
+    SELECT
+        t.transaction_id,
+        t.transaction_date,
+        t.amount,
+        t.currency,
+        CASE
+            WHEN t.currency = 'INR' THEN t.amount
+            ELSE t.amount / COALESCE(er.rate, 1)
+        END AS amount_inr
+    FROM transactions t
+    LEFT JOIN exchange_rates er
+        ON t.transaction_date = er.date
+        AND er.base_currency = 'INR'
+        AND er.target_currency = t.currency
+    WHERE t.status = 'completed' AND t.amount > 0
+)
+SELECT
+    to_char(transaction_date, 'YYYY-MM') AS month,
+    currency,
+    SUM(amount) AS original_total,
+    ROUND(SUM(amount_inr)::numeric, 2) AS total_inr,
+    COUNT(*) AS transaction_count
+FROM inr_transactions
+GROUP BY to_char(transaction_date, 'YYYY-MM'), currency
+ORDER BY month, total_inr DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\customer_cohorts.sql ====================
+-- Customer cohort analysis: group users by first transaction month
+WITH first_transaction AS (
+    SELECT
+        a.user_id,
+        MIN(t.transaction_date) AS first_date
+    FROM transactions t
+    JOIN accounts a ON t.account_id = a.account_id
+    WHERE t.status = 'completed'
+    GROUP BY a.user_id
+),
+cohorts AS (
+    SELECT
+        user_id,
+        to_char(first_date, 'YYYY-MM') AS cohort_month
+    FROM first_transaction
+)
+SELECT
+    co.cohort_month,
+    to_char(t.transaction_date, 'YYYY-MM') AS activity_month,
+    COUNT(DISTINCT a.user_id) AS active_users,
+    SUM(t.amount) AS total_spending,
+    ROUND(AVG(t.amount), 2) AS avg_spending
+FROM cohorts co
+JOIN accounts a ON co.user_id = a.user_id
+JOIN transactions t ON a.account_id = t.account_id
+WHERE t.status = 'completed' AND t.amount > 0
+GROUP BY co.cohort_month, to_char(t.transaction_date, 'YYYY-MM')
+ORDER BY co.cohort_month, activity_month;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\merchant_growth.sql ====================
+-- Merchant growth: month-over-month transaction count growth per merchant
+WITH monthly_merchant AS (
+    SELECT
+        m.normalized_name AS merchant,
+        to_char(t.transaction_date, 'YYYY-MM') AS month,
+        COUNT(*) AS transaction_count,
+        SUM(t.amount) AS total_amount
+    FROM transactions t
+    JOIN merchants m ON t.merchant_id = m.merchant_id
+    WHERE t.status = 'completed' AND t.amount > 0
+    GROUP BY m.normalized_name, to_char(t.transaction_date, 'YYYY-MM')
+)
+SELECT
+    merchant,
+    month,
+    transaction_count,
+    total_amount,
+    LAG(transaction_count) OVER (PARTITION BY merchant ORDER BY month) AS prev_count,
+    ROUND(
+        (transaction_count - LAG(transaction_count) OVER (PARTITION BY merchant ORDER BY month))::numeric
+        / NULLIF(LAG(transaction_count) OVER (PARTITION BY merchant ORDER BY month), 0) * 100, 1
+    ) AS growth_percent
+FROM monthly_merchant
+ORDER BY merchant, month;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\rolling_30day_spending.sql ====================
+-- Rolling 30-day spending per user
+SELECT
+    a.user_id,
+    t.transaction_date,
+    t.amount,
+    SUM(t.amount) OVER (
+        PARTITION BY a.user_id
+        ORDER BY t.transaction_date
+        RANGE BETWEEN INTERVAL '30 days' PRECEDING AND CURRENT ROW
+    ) AS rolling_30day_spending
+FROM transactions t
+JOIN accounts a ON t.account_id = a.account_id
+WHERE t.status = 'completed' AND t.amount > 0
+ORDER BY a.user_id, t.transaction_date
+LIMIT 100;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\spending_anomalies.sql ====================
+-- Spending anomalies: transactions that deviate significantly from average
+WITH stats AS (
+    SELECT
+        m.normalized_name AS merchant,
+        AVG(t.amount) AS avg_amount,
+        STDDEV(t.amount) AS stddev_amount
+    FROM transactions t
+    JOIN merchants m ON t.merchant_id = m.merchant_id
+    WHERE t.status = 'completed' AND t.amount > 0
+    GROUP BY m.normalized_name
+    HAVING COUNT(*) >= 5
+)
+SELECT
+    t.transaction_id,
+    t.transaction_date,
+    m.normalized_name AS merchant,
+    t.amount,
+    ROUND(s.avg_amount::numeric, 2) AS merchant_avg,
+    ROUND(s.stddev_amount::numeric, 2) AS merchant_stddev,
+    ROUND(((t.amount - s.avg_amount) / NULLIF(s.stddev_amount, 0))::numeric, 2) AS z_score
+FROM transactions t
+JOIN merchants m ON t.merchant_id = m.merchant_id
+JOIN stats s ON m.normalized_name = s.merchant
+WHERE t.status = 'completed'
+  AND t.amount > 0
+  AND ABS(t.amount - s.avg_amount) > 2 * s.stddev_amount
+ORDER BY ABS(t.amount - s.avg_amount) DESC
+LIMIT 50;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\advanced\subscription_detection.sql ====================
+-- Subscription detection: recurring transactions with regular intervals
+WITH transaction_intervals AS (
+    SELECT
+        m.normalized_name AS merchant,
+        t.amount,
+        t.transaction_date,
+        LAG(t.transaction_date) OVER (
+            PARTITION BY m.normalized_name
+            ORDER BY t.transaction_date
+        ) AS prev_date,
+        t.transaction_date - LAG(t.transaction_date) OVER (
+            PARTITION BY m.normalized_name
+            ORDER BY t.transaction_date
+        ) AS days_between
+    FROM transactions t
+    JOIN merchants m ON t.merchant_id = m.merchant_id
+    WHERE t.status = 'completed' AND t.amount > 0
+),
+merchant_patterns AS (
+    SELECT
+        merchant,
+        COUNT(*) AS occurrence_count,
+        ROUND(AVG(amount)::numeric, 2) AS avg_amount,
+        ROUND(STDDEV(amount)::numeric, 2) AS amount_stddev,
+        ROUND(AVG(EXTRACT(EPOCH FROM days_between) / 86400)::numeric, 1) AS avg_days_between,
+        ROUND(STDDEV(EXTRACT(EPOCH FROM days_between) / 86400)::numeric, 1) AS days_stddev
+    FROM transaction_intervals
+    WHERE days_between IS NOT NULL
+    GROUP BY merchant
+    HAVING COUNT(*) >= 3
+)
+SELECT
+    merchant,
+    avg_amount,
+    occurrence_count,
+    avg_days_between,
+    days_stddev,
+    CASE
+        WHEN avg_days_between BETWEEN 6 AND 8 THEN 'weekly'
+        WHEN avg_days_between BETWEEN 13 AND 16 THEN 'biweekly'
+        WHEN avg_days_between BETWEEN 25 AND 35 THEN 'monthly'
+        WHEN avg_days_between BETWEEN 85 AND 95 THEN 'quarterly'
+        WHEN avg_days_between BETWEEN 355 AND 375 THEN 'yearly'
+        ELSE 'irregular'
+    END AS detected_frequency
+FROM merchant_patterns
+WHERE days_stddev < 10
+ORDER BY avg_amount DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\average_transaction_value.sql ====================
+-- Average transaction value by account type
+SELECT
+    a.account_type,
+    COUNT(t.*) AS transaction_count,
+    ROUND(AVG(t.amount), 2) AS avg_amount,
+    MIN(t.amount) AS min_amount,
+    MAX(t.amount) AS max_amount
+FROM transactions t
+JOIN accounts a ON t.account_id = a.account_id
+WHERE t.status = 'completed'
+  AND t.amount > 0
+GROUP BY a.account_type
+ORDER BY avg_amount DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\spending_by_account.sql ====================
+-- Spending by account
+SELECT
+    a.account_id,
+    a.account_type,
+    a.institution,
+    a.currency,
+    SUM(t.amount) AS total_spending,
+    COUNT(*) AS transaction_count
+FROM accounts a
+JOIN transactions t ON a.account_id = t.account_id
+WHERE t.status = 'completed'
+  AND t.amount > 0
+GROUP BY a.account_id, a.account_type, a.institution, a.currency
+ORDER BY total_spending DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\spending_by_category.sql ====================
+-- Spending breakdown by category
+SELECT
+    c.category_name,
+    c.parent_category,
+    SUM(t.amount) AS total_spending,
+    COUNT(*) AS transaction_count,
+    ROUND(AVG(t.amount), 2) AS avg_amount
+FROM transactions t
+JOIN merchants m ON t.merchant_id = m.merchant_id
+JOIN categories c ON m.category_id = c.category_id
+WHERE t.status = 'completed'
+  AND t.amount > 0
+GROUP BY c.category_name, c.parent_category
+ORDER BY total_spending DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\spending_by_month.sql ====================
+-- Monthly spending trend
+SELECT
+    to_char(transaction_date, 'YYYY-MM') AS month,
+    SUM(amount) AS total_spending,
+    COUNT(*) AS transaction_count,
+    ROUND(AVG(amount), 2) AS avg_amount
+FROM transactions
+WHERE status = 'completed'
+  AND amount > 0
+GROUP BY to_char(transaction_date, 'YYYY-MM')
+ORDER BY month;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\top_merchants.sql ====================
+-- Top merchants by total spending
+SELECT
+    m.normalized_name AS merchant,
+    SUM(t.amount) AS total_spending,
+    COUNT(*) AS transaction_count,
+    ROUND(AVG(t.amount), 2) AS avg_amount,
+    MIN(t.transaction_date) AS first_transaction,
+    MAX(t.transaction_date) AS last_transaction
+FROM transactions t
+JOIN merchants m ON t.merchant_id = m.merchant_id
+WHERE t.status = 'completed'
+  AND t.amount > 0
+GROUP BY m.normalized_name
+ORDER BY total_spending DESC
+LIMIT 20;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\total_spending.sql ====================
+-- Total spending across all accounts
+SELECT
+    SUM(amount) AS total_spending,
+    COUNT(*) AS transaction_count,
+    ROUND(AVG(amount), 2) AS average_amount
+FROM transactions
+WHERE status = 'completed'
+  AND amount > 0;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\basic\transaction_count_by_status.sql ====================
+-- Transaction count by status
+SELECT
+    status,
+    COUNT(*) AS count,
+    SUM(amount) AS total_amount,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage
+FROM transactions
+GROUP BY status
+ORDER BY count DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\duplicate_detection.sql ====================
+-- Duplicate transaction detection
+SELECT
+    account_id,
+    merchant_id,
+    transaction_date,
+    amount,
+    currency,
+    COUNT(*) AS duplicate_count
+FROM transactions
+GROUP BY account_id, merchant_id, transaction_date, amount, currency
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC
+LIMIT 50;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\first_transaction_per_user.sql ====================
+-- First transaction per user
+SELECT DISTINCT ON (u.user_id)
+    u.user_id,
+    u.name,
+    t.transaction_date AS first_transaction_date,
+    t.amount,
+    m.normalized_name AS merchant
+FROM users u
+JOIN accounts a ON u.user_id = a.user_id
+JOIN transactions t ON a.account_id = t.account_id
+LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+WHERE t.status = 'completed'
+ORDER BY u.user_id, t.transaction_date ASC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\merchant_normalization.sql ====================
+-- Merchant name normalization analysis
+SELECT
+    m.normalized_name,
+    COUNT(DISTINCT m.merchant_name) AS variation_count,
+    ARRAY_AGG(DISTINCT m.merchant_name) AS variations,
+    SUM(t.amount) AS total_spending
+FROM merchants m
+LEFT JOIN transactions t ON m.merchant_id = t.merchant_id
+GROUP BY m.normalized_name
+HAVING COUNT(DISTINCT m.merchant_name) > 1
+ORDER BY variation_count DESC;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\month_over_month_spending.sql ====================
+-- Month-over-month spending change
+WITH monthly AS (
+    SELECT
+        to_char(transaction_date, 'YYYY-MM') AS month,
+        SUM(amount) AS spending
+    FROM transactions
+    WHERE status = 'completed' AND amount > 0
+    GROUP BY to_char(transaction_date, 'YYYY-MM')
+)
+SELECT
+    month,
+    spending,
+    LAG(spending) OVER (ORDER BY month) AS prev_month_spending,
+    spending - LAG(spending) OVER (ORDER BY month) AS change,
+    ROUND(
+        (spending - LAG(spending) OVER (ORDER BY month))
+        / NULLIF(LAG(spending) OVER (ORDER BY month), 0) * 100, 1
+    ) AS change_percent
+FROM monthly
+ORDER BY month;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\most_expensive_per_month.sql ====================
+-- Most expensive transaction per month
+WITH ranked AS (
+    SELECT
+        to_char(transaction_date, 'YYYY-MM') AS month,
+        transaction_id,
+        amount,
+        description,
+        ROW_NUMBER() OVER (
+            PARTITION BY to_char(transaction_date, 'YYYY-MM')
+            ORDER BY amount DESC
+        ) AS rank
+    FROM transactions
+    WHERE status = 'completed' AND amount > 0
+)
+SELECT month, transaction_id, amount, description
+FROM ranked
+WHERE rank = 1
+ORDER BY month;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\running_spending_total.sql ====================
+-- Running spending total
+SELECT
+    transaction_date,
+    amount,
+    SUM(amount) OVER (
+        ORDER BY transaction_date
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS running_total
+FROM transactions
+WHERE status = 'completed' AND amount > 0
+ORDER BY transaction_date
+LIMIT 100;
+
+==================== C:\Users\Jatin\Desktop\finsight\sql\intermediate\top_5_merchants_per_category.sql ====================
+-- Top 5 merchants per category
+WITH ranked AS (
+    SELECT
+        c.category_name,
+        m.normalized_name AS merchant,
+        SUM(t.amount) AS total_spending,
+        ROW_NUMBER() OVER (
+            PARTITION BY c.category_name
+            ORDER BY SUM(t.amount) DESC
+        ) AS rank
+    FROM transactions t
+    JOIN merchants m ON t.merchant_id = m.merchant_id
+    JOIN categories c ON m.category_id = c.category_id
+    WHERE t.status = 'completed' AND t.amount > 0
+    GROUP BY c.category_name, m.normalized_name
+)
+SELECT category_name, merchant, total_spending, rank
+FROM ranked
+WHERE rank <= 5
+ORDER BY category_name, rank;
+

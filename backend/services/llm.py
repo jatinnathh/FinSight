@@ -149,15 +149,21 @@ async def explain_result(question: str, sql: str, result: list) -> str:
 async def _call_groq(prompt: str) -> str:
     """Call Groq API."""
     from groq import AsyncGroq
+    import httpx
 
-    client = AsyncGroq(api_key=GROQ_API_KEY)
-    response = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=1024,
-    )
-    return response.choices[0].message.content
+    # Create httpx client without deprecated 'proxies' param (httpx 0.28+ compat)
+    http_client = httpx.AsyncClient()
+    client = AsyncGroq(api_key=GROQ_API_KEY, http_client=http_client)
+    try:
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content
+    finally:
+        await http_client.aclose()
 
 
 async def _call_gemini(prompt: str) -> str:
@@ -166,7 +172,7 @@ async def _call_gemini(prompt: str) -> str:
 
     client = genai.Client(api_key=GEMINI_API_KEY)
     response = await client.aio.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
     )
     return response.text
