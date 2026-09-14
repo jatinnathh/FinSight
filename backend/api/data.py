@@ -147,15 +147,19 @@ async def load_demo():
 
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+    # Use the venv Python — sys.executable may point to anaconda under uvicorn reloader
+    venv_python = os.path.join(base_dir, "venv", "Scripts", "python.exe")
+    python_exe = venv_python if os.path.exists(venv_python) else sys.executable
+
     # Generate data
     gen_script = os.path.join(base_dir, "data_generator", "generate_data.py")
-    result = subprocess.run([sys.executable, gen_script], capture_output=True, text=True, cwd=base_dir)
+    result = subprocess.run([python_exe, gen_script], capture_output=True, text=True, cwd=base_dir)
     if result.returncode != 0:
         raise HTTPException(500, f"Data generation failed: {result.stderr}")
 
     # Seed data
     seed_script = os.path.join(base_dir, "data_generator", "seed_data.py")
-    result = subprocess.run([sys.executable, seed_script], capture_output=True, text=True, cwd=base_dir)
+    result = subprocess.run([python_exe, seed_script], capture_output=True, text=True, cwd=base_dir)
     if result.returncode != 0:
         raise HTTPException(500, f"Data seeding failed: {result.stderr}")
 
