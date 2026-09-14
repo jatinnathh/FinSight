@@ -1,1554 +1,493 @@
 # FinSight — Data Engineering & SQL Analytics Platform
 
-## 1. What is FinSight?
+<div align="center">
 
-**FinSight is a personal-finance data engineering platform that turns messy transaction data into validated, traceable analytics.**
+**From messy financial data → trusted data → explainable insights**
 
-The project is deliberately designed around a data-engineering problem rather than a finance dashboard:
+[![Next.js](https://img.shields.io/badge/Next.js-16.3-black?logo=next.js)](https://nextjs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-336791?logo=postgresql)](https://neon.tech/)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript)](https://typescriptlang.org/)
 
-> **How do you take unreliable raw data, clean and transform it with SQL, validate it, and make sure the numbers shown to a user can be traced back to their source?**
-
-The application lets a user:
-
-1. Load a realistic, intentionally messy dataset or upload a CSV.
-2. Inspect the raw records.
-3. Map incoming columns to a canonical transaction schema.
-4. Run validation checks before trusting the data.
-5. Transform raw transactions into analytical models.
-6. Explore SQL transformations and data lineage.
-7. Investigate anomalies and data-quality failures.
-8. View analytics generated from the modeled data.
-9. Ask natural-language questions and inspect the SQL generated for them.
-
-The central idea is:
-
-```text
-Raw Financial Data
-       ↓
-   Ingestion
-       ↓
-   PostgreSQL
-       ↓
- SQL Transformations
-       ↓
- Data Quality Checks
-       ↓
- Analytical Models
-       ↓
-   SQL Analytics
-       ↓
- User-facing Insights
-```
+</div>
 
 ---
 
-# 2. Why this project exists
+## Overview
 
-Most finance applications stop at:
+FinSight is a **full-stack data engineering portfolio project** that demonstrates a complete data pipeline — from raw, messy CSV ingestion through SQL transformations, data quality validation, lineage tracking, and interactive analytics.
 
-```text
-database → charts
-```
+Unlike typical CRUD dashboards, FinSight focuses on **what happens before the chart**: data ingestion, column mapping, validation, transformation, quality checks, and traceability. Every metric on the dashboard is traceable back through the SQL DAG to its raw source.
 
-FinSight focuses on what happens **before** the chart.
-
-A dashboard saying:
-
-> "You spent ₹84,320"
-
-is not very interesting by itself.
-
-FinSight asks:
-
-> Where did that number come from?
-
-The application should allow the user to trace:
-
-```text
-₹84,320
-   ↓
-monthly_spending
-   ↓
-int_clean_transactions
-   ↓
-stg_transactions
-   ↓
-raw.transactions
-   ↓
-original uploaded record
-```
-
-This makes SQL, data modeling, validation, and data lineage visible through the UI.
-
----
-
-# 3. Dataset
-
-FinSight includes an intentionally messy synthetic dataset generator.
-
-## Current dataset scale
+### Key Metrics
 
 | Metric | Value |
 |---|---:|
-| Transactions | **100,000** |
-| Users | **50** |
-| Accounts | **80** |
-| Date range | **Jan 2025 – Aug 2026** |
-| Supported normal currencies | **4** |
-| Deliberately invalid currencies | **3** |
-| Transaction statuses | **4** |
-| Transaction types | **4** |
-
-Normal currencies:
-
-```text
-INR
-USD
-EUR
-GBP
-```
-
-Invalid test currencies:
-
-```text
-XYZ
-ABC
-123
-```
-
-The generator also produces multiple merchant-name variants to test normalization.
-
-Examples:
-
-```text
-Amazon
-AMAZON
-Amazon.com
-AMZN
-amazon india
-Amazon IN
-AMAZON.IN
-```
-
-Similar variations are generated for other merchants.
-
-This creates a dataset where simple `SELECT *` queries are not enough.
+| Demo transactions generated | **100,000** |
+| CSV upload support | **Up to 10,000+ rows** |
+| SQL transformation layers | **4** (raw → staging → intermediate → marts) |
+| Data quality checks | **8** automated checks |
+| API endpoints | **20+** RESTful routes |
+| Database tables | **10** normalized tables |
+| Supported currencies | **8** (INR, USD, EUR, GBP, JPY, CAD, AUD, SGD) |
 
 ---
 
-# 4. Data-quality problems intentionally included
+## Architecture
 
-The dataset is designed to simulate problems that occur in real data pipelines.
-
-### Duplicate records
-
-The same transaction can appear more than once.
-
-The project can detect duplicates using combinations such as:
-
-```sql
-GROUP BY
-    account_id,
-    merchant_id,
-    transaction_date,
-    amount,
-    currency
-HAVING COUNT(*) > 1
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        User Browser                         │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   Next.js 16 (Turbopack)                     │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
+│  │Dashboard │  │SQL Lab   │  │Pipeline  │  │Data Quality │  │
+│  │          │  │          │  │Runs      │  │Inspector    │  │
+│  └──────────┘  └──────────┘  └──────────┘  └─────────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
+│  │CSV Upload│  │Lineage   │  │Detective │  │Ask FinSight │  │
+│  │& Mapping │  │Graph     │  │          │  │(AI/NL→SQL)  │  │
+│  └──────────┘  └──────────┘  └──────────┘  └─────────────┘  │
+└──────────────────────────┬───────────────────────────────────┘
+                           │  HTTP Proxy (rewrites)
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     FastAPI Backend                           │
+│  ┌─────────────────┐  ┌──────────────────┐                   │
+│  │ Ingestion        │  │ Analytics        │                   │
+│  │ • CSV parsing    │  │ • Overview       │                   │
+│  │ • Column detect  │  │ • Spending trend │                   │
+│  │ • Mapping        │  │ • Categories     │                   │
+│  │ • Batch import   │  │ • Merchants      │                   │
+│  └─────────────────┘  └──────────────────┘                   │
+│  ┌─────────────────┐  ┌──────────────────┐                   │
+│  │ Validation       │  │ Pipeline         │                   │
+│  │ • 8 quality      │  │ • Metadata       │                   │
+│  │   checks         │  │ • Run tracking   │                   │
+│  │ • SQL-inspectable│  │ • Step timings   │                   │
+│  └─────────────────┘  └──────────────────┘                   │
+│  ┌─────────────────┐  ┌──────────────────┐                   │
+│  │ LLM Service      │  │ Incident Engine  │                   │
+│  │ • NL → SQL       │  │ • Inject faults  │                   │
+│  │ • Gemini API     │  │ • Fix faults     │                   │
+│  └─────────────────┘  └──────────────────┘                   │
+└──────────────────────────┬───────────────────────────────────┘
+                           │  asyncpg (connection pool)
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│               PostgreSQL (Neon Serverless)                    │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │ Tables: users, accounts, transactions, merchants,     │    │
+│  │         categories, budgets, subscriptions,           │    │
+│  │         exchange_rates, pipeline_runs,                │    │
+│  │         data_quality_results                          │    │
+│  └──────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### Merchant-name inconsistency
+### Technology Stack
 
-A single merchant may appear as:
-
-```text
-Amazon
-AMAZON
-Amazon.com
-AMZN
-```
-
-The transformation layer maps these variations to a normalized merchant.
-
-### Missing data
-
-Records can contain missing:
-
-- merchants
-- categories
-- required fields
-
-### Invalid currencies
-
-Records can contain unexpected currency codes.
-
-### Transaction-status complexity
-
-The dataset contains:
-
-```text
-completed
-pending
-failed
-refunded
-```
-
-### Transaction-type complexity
-
-The dataset contains:
-
-```text
-debit
-credit
-refund
-transfer
-```
-
-This forces analytical queries to explicitly decide which records should be included.
+| Layer | Technology | Purpose |
+|---|---|---|
+| **Frontend** | Next.js 16 + TypeScript | SSR/CSR pages, component-based UI |
+| **Charts** | Recharts | Interactive spending trends, category breakdowns |
+| **Backend** | FastAPI + Python 3.12 | Async REST API, CSV processing, analytics |
+| **Database** | PostgreSQL on Neon | Serverless cloud PostgreSQL, connection pooling |
+| **DB Driver** | asyncpg | High-performance async PostgreSQL driver |
+| **AI/NLP** | Google Gemini API | Natural language → SQL translation |
+| **Data Gen** | Python (Faker + custom) | Synthetic messy dataset generation |
 
 ---
 
-# 5. Core architecture
+## Data Pipeline
 
-```text
-                         ┌─────────────────────┐
-                         │       User          │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │      Next.js        │
-                         │        UI           │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │      FastAPI        │
-                         │       Backend       │
-                         └──────────┬──────────┘
-                                    │
-                         ┌──────────┴──────────┐
-                         ▼                     ▼
-                ┌────────────────┐    ┌────────────────┐
-                │   PostgreSQL   │    │  SQL / Models  │
-                └───────┬────────┘    └───────┬────────┘
-                        │                      │
-                        └──────────┬───────────┘
-                                   ▼
-                         ┌─────────────────────┐
-                         │ Data Quality /      │
-                         │ Pipeline Metadata   │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │ Analytics + AI      │
-                         └─────────────────────┘
 ```
-
-The intended production version adds:
-
-```text
-Airflow
-  ↓
-Python ingestion
-  ↓
-dbt
-  ↓
-PostgreSQL
-```
-
-with the frontend visualizing the results.
-
----
-
-# 6. Data model
-
-The main entities are:
-
-```text
-users
-accounts
-transactions
-merchants
-categories
-budgets
-subscriptions
-exchange_rates
-```
-
-Important relationships:
-
-```text
-users
-  │
-  └── accounts
+   CSV / Demo Data
         │
-        └── transactions
-              │
-              ├── merchants
-              │      └── categories
-              │
-              └── exchange_rates
+        ▼
+┌───────────────┐
+│  1. INGESTION │  Parse CSV, detect columns, auto-map aliases
+│     800+ ms   │  Supports 10+ date formats, debit/credit columns
+└───────┬───────┘
+        ▼
+┌───────────────┐
+│  2. MAPPING   │  Map uploaded columns → canonical schema
+│               │  Required: transaction_date, amount
+│               │  Optional: merchant, currency, status, type, description
+└───────┬───────┘
+        ▼
+┌───────────────┐
+│  3. VALIDATE  │  Separate errors (required) vs warnings (optional)
+│               │  Detect duplicates, unparseable dates, missing amounts
+│               │  Returns: valid_rows, invalid_rows, errors, warnings
+└───────┬───────┘
+        ▼
+┌───────────────┐
+│  4. IMPORT    │  Batch INSERT via executemany (asyncpg)
+│    ~3 sec     │  800 rows in ~3s to Neon (vs 120s+ row-by-row)
+│   for 800     │  Auto-resolve merchants, safe NULL handling
+└───────┬───────┘
+        ▼
+┌───────────────┐
+│  5. QUALITY   │  8 automated SQL checks:
+│   CHECKS      │  • Required columns (NOT NULL)
+│               │  • Future dates
+│               │  • Duplicate detection
+│               │  • Missing merchants
+│               │  • Missing categories
+│               │  • Invalid currencies
+│               │  • Negative non-refund amounts
+│               │  Each check: status, affected rows, SQL, sample records
+└───────┬───────┘
+        ▼
+┌───────────────┐
+│  6. ANALYTICS │  Dashboard, spending trends, category breakdowns,
+│               │  merchant rankings, subscription detection,
+│               │  anomaly investigation
+└───────────────┘
 ```
-
-This allows SQL queries to demonstrate joins across multiple related tables rather than operating on one flat CSV.
 
 ---
 
-# 7. SQL transformation layers
+## SQL Transformation Layers
 
-FinSight follows a layered data-modeling approach.
+FinSight follows a dbt-style layered data modeling approach:
 
-```text
-raw
- ↓
-staging
- ↓
-intermediate
- ↓
-marts
-```
-
-## Raw
-
-Example:
-
-```text
-raw.transactions
-```
-
-Contains data close to its ingested form.
-
----
-
-## Staging
-
-Example:
-
-```text
-stg_transactions
-```
-
-Responsibilities:
-
-- normalize casing
-- parse timestamps
-- standardize statuses
-- remove unusable records
-- preserve a predictable schema
-
-Example:
-
+### Layer 1: Raw
 ```sql
+-- raw.transactions — ingested data as-is
+SELECT * FROM transactions;
+```
+
+### Layer 2: Staging
+```sql
+-- stg_transactions — cleaned, normalized
 SELECT
-    transaction_id,
-    account_id,
-    merchant_id,
-    transaction_date,
-    amount,
+    transaction_id, account_id, merchant_id,
+    transaction_date, amount,
     UPPER(currency) AS currency,
     LOWER(status) AS status,
     LOWER(transaction_type) AS transaction_type
-FROM raw.transactions
-WHERE transaction_date IS NOT NULL
-  AND amount IS NOT NULL;
-```
-
----
-
-## Intermediate
-
-Example:
-
-```text
-int_clean_transactions
-```
-
-Responsibilities:
-
-- join merchants
-- join categories
-- normalize merchant names
-- fill missing category labels
-- restrict data to recognized currencies/statuses
-
-Example:
-
-```sql
-SELECT
-    t.*,
-    COALESCE(
-        m.normalized_name,
-        t.description,
-        'Unknown'
-    ) AS merchant,
-    COALESCE(
-        c.category_name,
-        'Uncategorized'
-    ) AS category
-FROM stg_transactions t
-LEFT JOIN merchants m
-    ON t.merchant_id = m.merchant_id
-LEFT JOIN categories c
-    ON m.category_id = c.category_id
-WHERE t.currency IN ('INR', 'USD', 'EUR', 'GBP')
-  AND t.status IN (
-      'completed',
-      'pending',
-      'failed',
-      'refunded'
-  );
-```
-
----
-
-# 8. Analytical marts
-
-## Monthly spending
-
-```text
-monthly_spending
-```
-
-Calculates spending by account and month.
-
-Important SQL concepts:
-
-- CTEs
-- `DATE_TRUNC`
-- `SUM`
-- `GROUP BY`
-- filtering
-
-Example:
-
-```sql
-WITH monthly AS (
-    SELECT
-        account_id,
-        DATE_TRUNC('month', transaction_date) AS month,
-        SUM(amount) AS spending
-    FROM int_clean_transactions
-    WHERE status = 'completed'
-      AND amount > 0
-    GROUP BY account_id, month
-)
-SELECT *
-FROM monthly;
-```
-
----
-
-## Merchant metrics
-
-```text
-merchant_metrics
-```
-
-Calculates:
-
-- transaction count
-- total spending
-- spending by category
-- merchant activity
-
-Example:
-
-```sql
-SELECT
-    merchant,
-    category,
-    COUNT(*) AS transaction_count,
-    SUM(amount) AS total_spending
-FROM int_clean_transactions
-WHERE status = 'completed'
-  AND amount > 0
-GROUP BY merchant, category;
-```
-
----
-
-# 9. SQL concepts demonstrated
-
-FinSight should explicitly demonstrate the SQL skills expected from a data-engineering role.
-
-## CTEs
-
-Used for multi-stage analytical queries.
-
-## Joins
-
-Used across:
-
-```text
-transactions
-accounts
-users
-merchants
-categories
-```
-
-## Window functions
-
-Examples include:
-
-```sql
-LAG(...)
-```
-
-for month-over-month comparisons.
-
-## Rolling windows
-
-The project includes a 30-day rolling spending query using:
-
-```sql
-SUM(amount) OVER (
-    PARTITION BY user_id
-    ORDER BY transaction_date
-    RANGE BETWEEN INTERVAL '30 days' PRECEDING
-          AND CURRENT ROW
-)
-```
-
-## Deduplication
-
-Duplicate groups are identified with grouped SQL and can be extended with:
-
-```sql
-ROW_NUMBER() OVER (...)
-```
-
-to retain one canonical record.
-
-## Aggregations
-
-The project uses:
-
-```text
-SUM
-COUNT
-AVG
-MIN
-MAX
-STDDEV
-```
-
-## Conditional logic
-
-Used for:
-
-- status handling
-- refunds
-- invalid data
-- anomaly classification
-
----
-
-# 10. Advanced SQL analytics
-
-The project also contains more advanced analytical queries.
-
-### Merchant growth
-
-Uses:
-
-```sql
-LAG(transaction_count)
-OVER (
-    PARTITION BY merchant
-    ORDER BY month
-)
-```
-
-to calculate month-over-month merchant growth.
-
-### Spending anomalies
-
-Uses:
-
-```text
-AVG
-STDDEV
-z-score
-```
-
-to identify transactions that significantly deviate from a merchant's normal transaction amount.
-
-### Subscription detection
-
-Uses transaction intervals and window functions to identify recurring payments.
-
-These make the project more than a CRUD application.
-
----
-
-# 11. Data-quality system
-
-FinSight runs SQL-based validation checks before analytics are considered trustworthy.
-
-Checks include:
-
-- required-field validation
-- future transaction dates
-- duplicate detection
-- invalid currencies
-- referential integrity
-- negative/non-refund amounts
-- missing merchant/category information
-
-The backend exposes detailed quality results and can return:
-
-```text
-check name
-status
-affected rows
-sample records
-SQL used to detect the issue
-```
-
-For example:
-
-```text
-FAILED
-Duplicate Transactions
-
-Affected rows: 342
-
-[View Records]
-[View SQL]
-```
-
-The user can then see the actual SQL responsible for the failure.
-
----
-
-# 12. Pipeline observability
-
-FinSight represents the pipeline as explicit stages.
-
-```text
-Ingestion
-    ↓
-PostgreSQL
-    ↓
-Staging
-    ↓
-Intermediate
-    ↓
-Marts
-    ↓
-Data Quality
-    ↓
-Analytics
-```
-
-Each pipeline step can expose:
-
-```text
-status
-rows in
-rows out
-duration
-model
-input
-output
-transformations
-```
-
-The current pipeline metadata records example model timings such as:
-
-```text
-staging: 4.21 seconds
-marts:   5.06 seconds
-quality: 2.14 seconds
-analytics: 0.92 seconds
-```
-
-These are **pipeline-demo metadata values, not production performance benchmarks**.
-
-The recorded demo pipeline duration is approximately:
-
-```text
-2 minutes 13 seconds
-```
-
-The UI should label these appropriately rather than implying a benchmark.
-
----
-
-# 13. Data lineage
-
-The lineage graph connects:
-
-```text
-raw.transactions
-       ↓
-stg_transactions
-       ↓
-int_clean_transactions
-       ↓
- ┌─────┴───────────┐
- ↓                 ↓
-monthly_spending    merchant_metrics
- ↓                 ↓
- └───────┬─────────┘
-         ↓
-      Dashboard
-```
-
-Each node should be clickable.
-
-Clicking a model shows:
-
-```text
-Model
-Source
-Output
-Used by
-SQL
-```
-
-This lets a user answer:
-
-> "Where did this dashboard number come from?"
-
----
-
-# 14. User experience
-
-The project should not feel like a collection of disconnected pages.
-
-The intended experience is:
-
-```text
-LANDING PAGE
-     ↓
-"Try Demo Data"
-     ↓
-INGESTION
-     ↓
-RAW DATA PREVIEW
-     ↓
-COLUMN MAPPING
-     ↓
-VALIDATION
-     ↓
-PIPELINE RUN
-     ↓
-DATA QUALITY
-     ↓
-TRANSFORMATIONS
-     ↓
-LINEAGE
-     ↓
-ANALYTICS
-     ↓
-DATA DETECTIVE
-     ↓
-ASK FINSIGHT
-```
-
-A user should be able to complete this journey without knowing SQL beforehand.
-
-At the same time, a technical reviewer should be able to inspect the SQL underneath every major result.
-
----
-
-# 15. UI features to prioritize
-
-## A. Landing page
-
-The landing page should immediately explain:
-
-> **From messy financial data to trusted insights.**
-
-Show:
-
-```text
-Upload → Clean → Transform → Validate → Analyze
-```
-
-Buttons:
-
-```text
-Try Demo Data
-Upload CSV
-Explore Pipeline
-```
-
----
-
-## B. Add Data
-
-Explain exactly what happens after upload:
-
-```text
-1. Detect columns
-2. Map to schema
-3. Validate records
-4. Detect data-quality issues
-5. Load into PostgreSQL
-6. Run transformations
-7. Generate analytics
-```
-
-The demo dataset should advertise:
-
-```text
-100,000 transactions
-50 users
-80 accounts
-20 months of data
-4 normal currencies
-3 invalid currency codes
-4 transaction statuses
-4 transaction types
-```
-
----
-
-# 16. Pipeline page
-
-Make the pipeline visual rather than a static status page.
-
-Example:
-
-```text
-PIPELINE RUN #42
-
-100,000 input rows
-
-       ↓
-
-INGESTION
-100,000 rows
-✓ Python
-✓ PostgreSQL
-
-       ↓
-
-STAGING
-99,723 rows
-✓ Timestamp parsing
-✓ Currency normalization
-✓ Status normalization
-
-       ↓
-
-MARTS
-98,942 rows
-✓ Joins
-✓ Aggregations
-✓ Merchant metrics
-
-       ↓
-
-QUALITY
-18 passed
-2 warnings
-0 failed
-
-       ↓
-
-ANALYTICS
-READY
-```
-
-Every stage should be clickable.
-
----
-
-# 17. Transformation Explorer
-
-Create a page showing:
-
-```text
-RAW RECORD
-        ↓
-SQL TRANSFORMATION
-        ↓
-CLEAN RECORD
-```
-
-Example:
-
-```text
-RAW
-
-merchant = "AMZN"
-currency = "inr"
-status = "COMPLETED"
-
-        ↓
-
-SQL
-
-UPPER(currency)
-LOWER(status)
-merchant normalization
-
-        ↓
-
-MODELED
-
-merchant = "Amazon"
-currency = "INR"
-status = "completed"
-```
-
-This makes SQL transformations visible to the user.
-
----
-
-# 18. Data Quality Explorer
-
-Every check should be interactive.
-
-Example:
-
-```text
-✓ Required fields
-⚠ Future transaction dates
-✗ Duplicate transactions
-✓ Currency validation
-✓ Referential integrity
-```
-
-Clicking a failure should reveal:
-
-```text
-342 affected records
-
-[table of actual records]
-
-SQL:
-
-SELECT ...
 FROM transactions
-GROUP BY ...
-HAVING COUNT(*) > 1;
+WHERE transaction_date IS NOT NULL AND amount IS NOT NULL;
 ```
 
-This is one of the strongest demonstrations of SQL debugging in the project.
-
----
-
-# 19. SQL Lab
-
-Create a SQL playground with curated challenges.
-
-Example challenges:
-
-```text
-1. Total spending
-2. Monthly spending
-3. Top merchants
-4. Spending by category
-5. Duplicate detection
-6. Month-over-month growth
-7. 30-day rolling spending
-8. Spending anomalies
-9. Subscription detection
-10. First transaction per user
+### Layer 3: Intermediate
+```sql
+-- int_clean_transactions — enriched with merchant/category joins
+SELECT t.*,
+    COALESCE(m.normalized_name, t.description, 'Unknown') AS merchant,
+    COALESCE(c.category_name, 'Uncategorized') AS category
+FROM stg_transactions t
+LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+LEFT JOIN categories c ON m.category_id = c.category_id
+WHERE t.currency IN ('INR', 'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'SGD');
 ```
 
-For each challenge show:
-
-```text
-Question
-↓
-SQL
-↓
-Run
-↓
-Result table
-↓
-Explanation
-```
-
-This makes the project visibly SQL-heavy.
-
----
-
-# 20. Data Detective
-
-The Data Detective should answer:
-
-> "Why does this number look wrong?"
-
-Example flow:
-
-```text
-Spending increased 74%
-        ↓
-Check duplicates
-        ↓
-Check missing records
-        ↓
-Check refunds
-        ↓
-Check currencies
-        ↓
-Check merchant distribution
-        ↓
-ROOT CAUSE
-```
-
-Example result:
-
-```text
-ROOT CAUSE FOUND
-
-3,204 duplicate transaction groups detected.
-
-Likely cause:
-duplicate ingestion.
-
-[View Records]
-[View SQL]
-[View Pipeline Run]
-```
-
-The important feature is not the fancy explanation.
-
-The important feature is that the explanation is backed by SQL and actual records.
-
----
-
-# 21. Ask FinSight
-
-The natural-language interface should follow:
-
-```text
-User question
-      ↓
-LLM
-      ↓
-SQL generation
-      ↓
-SQL validation
-      ↓
-Read-only validation
-      ↓
-PostgreSQL
-      ↓
-Result validation
-      ↓
-Answer
-```
-
-Example:
-
-> Where did I spend the most last month?
-
-Show:
-
-```text
-Generated SQL
-       ↓
-Validation
-✓ Read-only
-✓ Valid tables
-✓ Valid columns
-       ↓
-Query result
-       ↓
-Natural-language explanation
-```
-
-This connects the data-engineering project with the existing LLM experience.
-
----
-
-# 22. Incident simulation
-
-A particularly strong feature for demonstrations is:
-
-## "Break the pipeline"
-
-Allow a user to intentionally inject:
-
-```text
-Duplicate transactions
-Missing categories
-Invalid currencies
-Broken timestamps
-Negative amounts
-Missing merchant mappings
-```
-
-Then run the pipeline.
-
-The UI should show:
-
-```text
-Pipeline
-    ↓
-❌ Quality check failed
-    ↓
-342 affected rows
-    ↓
-Investigate
-    ↓
-SQL
-    ↓
-Root cause
-    ↓
-Fix
-    ↓
-Run again
-    ↓
-✓ Quality passed
-```
-
-This turns the project into an interactive data-engineering demonstration.
-
----
-
-# 23. Dashboard traceability
-
-Every important dashboard metric should have:
-
-```text
-Metric
-  ↓
-How calculated?
-  ↓
-SQL model
-  ↓
-Source table
-  ↓
-Filters
-  ↓
-Last pipeline run
-```
-
-For example:
-
-```text
-TOTAL SPENDING
-
-₹84,320
-
-How calculated?
-
-Model:
-monthly_spending
-
-Filter:
-status = completed
-amount > 0
-
-Aggregation:
-SUM(amount)
-
-Source:
-int_clean_transactions
-```
-
-The user should be able to click:
-
-**View SQL**
-
-and see the actual query.
-
----
-
-# 24. Technology stack
-
-## Frontend
-
-```text
-Next.js
-TypeScript
-React
-Recharts
-```
-
-## Backend
-
-```text
-Python
-FastAPI
-```
-
-## Database
-
-```text
-PostgreSQL
-```
-
-## Data engineering
-
-```text
-SQL
-dbt / dbt-style modeling
-Airflow
-Python ingestion
-```
-
-## Infrastructure
-
-```text
-Docker
-Linux
-Git
-```
-
-## AI
-
-```text
-LLM SQL generation
-SQL validation
-Natural-language analytics
+### Layer 4: Marts
+```sql
+-- monthly_spending — analytical aggregate
+SELECT
+    account_id,
+    DATE_TRUNC('month', transaction_date) AS month,
+    SUM(amount) AS spending,
+    COUNT(*) AS transaction_count
+FROM int_clean_transactions
+WHERE status = 'completed' AND amount > 0
+GROUP BY account_id, month;
 ```
 
 ---
 
-# 25. Suggested repository structure
+## Database Schema
 
-```text
-finsight/
-│
-├── app/
-│   ├── dashboard/
-│   ├── transactions/
-│   ├── analytics/
-│   ├── add-data/
-│   ├── data-quality/
-│   ├── transformations/
-│   ├── lineage/
-│   ├── pipeline/
-│   ├── data-detective/
-│   ├── sql-lab/
-│   └── ask/
-│
-├── backend/
-│   ├── api/
-│   ├── services/
-│   ├── db/
-│   └── main.py
-│
-├── sql/
-│   ├── basic/
-│   ├── intermediate/
-│   └── advanced/
-│
-├── dbt/
-│   ├── models/
-│   │   ├── staging/
-│   │   ├── intermediate/
-│   │   └── marts/
-│   ├── tests/
-│   └── dbt_project.yml
-│
-├── airflow/
-│   └── dags/
-│
-├── data_generator/
-│   └── generate_data.py
-│
-└── README.md
 ```
+┌─────────┐     ┌───────────┐     ┌──────────────┐
+│  users  │────▶│ accounts  │────▶│ transactions │
+│  (50)   │     │   (80)    │     │  (100,000)   │
+└─────────┘     └───────────┘     └──────┬───────┘
+                                         │
+                    ┌────────────────────┤
+                    ▼                    ▼
+              ┌───────────┐      ┌─────────────┐
+              │ merchants │─────▶│ categories  │
+              │   (200+)  │      │    (24)     │
+              └───────────┘      └─────────────┘
+
+Other tables: budgets, subscriptions, exchange_rates,
+              pipeline_runs, data_quality_results
+```
+
+### Table Details
+
+| Table | Rows (demo) | Key Columns |
+|---|---:|---|
+| `users` | 50 | user_id, name, email |
+| `accounts` | 80 | account_id, user_id, account_type, currency |
+| `transactions` | 100,000 | transaction_id, account_id, merchant_id, date, amount, currency, status, type |
+| `merchants` | 200+ | merchant_id, merchant_name, normalized_name, category_id |
+| `categories` | 24 | category_id, category_name, parent_category |
+| `exchange_rates` | 1,460+ | date, base_currency, target_currency, rate |
+| `pipeline_runs` | dynamic | run_id, status, rows_processed, rows_rejected |
+| `data_quality_results` | dynamic | check_name, status, affected_rows |
 
 ---
 
-# 26. Project metrics
+## Features
 
-The following metrics are useful for describing the project without inventing production-scale claims:
+### 1. CSV Upload & Column Mapping
+- Drag-and-drop CSV upload
+- Auto-detection of column types via alias matching (10+ aliases per canonical field)
+- Interactive mapping UI: map any CSV column → canonical schema field or skip
+- Required fields: `transaction_date`, `amount`
+- Optional fields: `merchant`, `currency`, `status`, `transaction_type`, `description`
+- Supports 10 date formats (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, etc.)
+- Handles split debit/credit columns automatically
 
-### Dataset
+### 2. Validation Engine
+- **Errors** (block import): unparseable dates, missing/invalid amounts
+- **Warnings** (allow import): missing merchant, missing optional fields, duplicates
+- Returns structured response: `valid_rows`, `invalid_rows`, `errors[]`, `warnings[]`, `missing_optional_fields[]`, `duplicate_count`
+- Validates before import — user sees exact issues before committing
 
-- **100,000** generated transactions
-- **50** users
-- **80** accounts
-- **20 months** of transaction history
-- **4** supported currencies
-- **3** deliberately invalid currency codes
-- **4** transaction statuses
-- **4** transaction types
+### 3. Batch Import
+- Uses `asyncpg.executemany()` for batched INSERT operations
+- 800 rows imported in ~3 seconds to Neon (serverless PostgreSQL)
+- Batch merchant resolution: single query for all unique merchants
+- Safe NULL handling with `or` pattern for optional field defaults
+- Fallback to row-by-row on batch failure with per-row error reporting
 
-### SQL
+### 4. Interactive Dashboard
+- Total spending, transaction count, average transaction
+- Month-over-month change percentage
+- Spending trend chart (Recharts LineChart)
+- Top categories breakdown with visual bars
+- Auto-adapts to uploaded data date range (not hardcoded to current month)
 
-The project contains SQL across:
+### 5. SQL Lab
+- Write and execute arbitrary SQL against the live database
+- Syntax-highlighted query editor
+- Tabular results display
+- Pre-built example queries
 
-- basic aggregation
-- joins
-- CTEs
-- window functions
-- deduplication
-- rolling windows
-- anomaly detection
-- subscription detection
-- merchant growth analysis
+### 6. Data Quality Inspector
+- 8 automated quality checks with pass/warn/fail status
+- Click any check to see: affected records, the exact SQL used
+- Checks: required columns, future dates, duplicates, missing merchants, missing categories, invalid currencies, negative non-refund amounts
+
+### 7. Break the Pipeline
+- Inject deliberate data quality incidents:
+  - 500 duplicate transactions
+  - 200 invalid currency records
+  - 150 future-dated transactions
+  - 100 negative non-refund amounts
+  - 300 missing-category records
+- Fix incidents with one click (tagged for safe removal)
+- Watch quality checks fail and recover
+
+### 8. Data Lineage
+- Visual DAG: `raw.transactions` → `stg_transactions` → `int_clean_transactions` → marts → dashboard
+- Click any node to see: model name, source, output, SQL, dependencies
+
+### 9. Data Detective
+- Anomaly investigation: duplicates, missing merchants, refunds, currency issues
+- Current vs previous month spending comparison
+- Z-score based spending anomaly detection
+
+### 10. Ask FinSight (AI)
+- Natural language → SQL via Google Gemini API
+- Ask questions like "What are my top 5 merchants by spending?"
+- See the generated SQL alongside results
+- Schema-aware prompting for accurate queries
+
+---
+
+## Data Quality Checks
+
+| # | Check | Type | SQL Pattern |
+|---|---|---|---|
+| 1 | Required columns (account_id, date, amount) | `fail` | `WHERE col IS NULL` |
+| 2 | Future transaction dates | `warn` | `WHERE date > CURRENT_DATE` |
+| 3 | Duplicate transactions | `warn` | `GROUP BY ... HAVING COUNT(*) > 1` |
+| 4 | Missing merchants | `warn` | `WHERE merchant_id IS NULL` |
+| 5 | Missing categories | `warn` | `LEFT JOIN ... WHERE category_id IS NULL` |
+| 6 | Invalid currencies | `warn` | `WHERE currency NOT IN (...)` |
+| 7 | Negative non-refund amounts | `fail` | `WHERE amount < 0 AND type != 'refund'` |
+| 8 | Total row count | `info` | `SELECT COUNT(*)` |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.12+
+- Node.js 18+
+- PostgreSQL database (or [Neon](https://neon.tech) account)
+
+### Installation
+
+```bash
+# Clone repository
+git clone https://github.com/jatinnathh/FinSight.git
+cd FinSight
+
+# Backend setup
+python -m venv venv
+.\venv\Scripts\activate        # Windows
+pip install -r backend/requirements.txt
+
+# Frontend setup
+npm install
+
+# Environment variables
+# Create .env file with:
+# DATABASE_URL=postgresql://user:pass@host/dbname
+# GEMINI_API_KEY=your-key (optional, for Ask FinSight)
+```
+
+### Running
+
+```bash
+# Terminal 1: Backend
+.\venv\Scripts\python.exe backend\main.py
+# Starts FastAPI on http://localhost:8000 with auto-reload
+
+# Terminal 2: Frontend
+npm run dev
+# Starts Next.js on http://localhost:3000
+```
+
+### First Run
+
+1. Open `http://localhost:3000`
+2. Click **"Try Demo Dataset"** to load 100K synthetic transactions
+3. Or click **"Upload CSV"** to import your own data
+4. Explore: Dashboard → SQL Lab → Data Quality → Pipeline → Lineage → Detective
+
+---
+
+## API Endpoints
+
+### Data Ingestion
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/data/upload-csv` | Upload CSV, detect columns |
+| `POST` | `/api/v1/data/validate` | Validate column mapping |
+| `POST` | `/api/v1/data/import` | Batch import mapped data |
+| `POST` | `/api/v1/data/load-demo` | Generate & load demo dataset |
+| `GET` | `/api/v1/data/quality` | Run all quality checks |
+| `GET` | `/api/v1/data/quality/detail` | Sample records + SQL for a check |
 
 ### Pipeline
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/data/inject-incident` | Inject a data quality incident |
+| `POST` | `/api/v1/data/fix-incident` | Remove injected incident records |
+| `GET` | `/api/v1/pipeline/runs` | List pipeline run history |
+| `GET` | `/api/v1/pipeline/models` | SQL transformation models |
+| `GET` | `/api/v1/pipeline/lineage` | Data lineage DAG |
 
-The demo pipeline exposes:
-
-- ingestion
-- staging
-- intermediate transformations
-- analytical marts
-- quality validation
-- analytics serving
-
-### Quality
-
-Quality checks cover:
-
-- required fields
-- duplicate records
-- future dates
-- currency validity
-- referential integrity
-- transaction amount rules
-- merchant/category completeness
-
-### Existing pipeline metadata
-
-The UI currently models example stage durations of:
-
-- **4.21 s** — staging
-- **5.06 s** — marts
-- **2.14 s** — quality
-- **0.92 s** — analytics
-
-These should be treated as **demo metadata until measured from real executions**.
+### Analytics
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/dashboard/overview` | Dashboard metrics |
+| `GET` | `/api/v1/dashboard/spending-over-time` | Monthly spending trend |
+| `GET` | `/api/v1/dashboard/top-categories` | Top spending categories |
+| `GET` | `/api/v1/dashboard/top-merchants` | Top merchants by spend |
+| `POST` | `/api/v1/ask` | Natural language → SQL |
+| `GET` | `/api/v1/health` | Health check |
 
 ---
 
-# 27. What makes this a strong data-engineering project
+## Project Structure
 
-FinSight is not primarily a dashboard.
-
-The dashboard is the final consumer of a pipeline.
-
-The actual project demonstrates:
-
-```text
-DATA INGESTION
-      +
-POSTGRESQL
-      +
-SQL
-      +
-DATA MODELING
-      +
-DATA QUALITY
-      +
-PIPELINE OBSERVABILITY
-      +
-DATA LINEAGE
-      +
-ANALYTICS
-      +
-LLM SQL GENERATION
-      +
-SQL VALIDATION
 ```
-
-The most important design principle is:
-
-> **No important number should be a black box.**
-
-A reviewer should be able to go from:
-
-```text
-dashboard metric
+finsight/
+├── app/                          # Next.js 16 pages (App Router)
+│   ├── page.tsx                  # Landing page
+│   ├── dashboard/page.tsx        # Analytics dashboard
+│   ├── add-data/                 # Data ingestion
+│   │   ├── page.tsx              # Demo data loader
+│   │   └── upload/page.tsx       # CSV upload + mapping
+│   ├── sql-lab/page.tsx          # Interactive SQL editor
+│   ├── pipeline/page.tsx         # Pipeline run history
+│   ├── data-quality/page.tsx     # Quality check results
+│   ├── data-detective/page.tsx   # Anomaly investigation
+│   ├── break-pipeline/page.tsx   # Incident injection
+│   ├── ask/page.tsx              # AI-powered NL→SQL
+│   ├── components/Sidebar.tsx    # Navigation sidebar
+│   └── layout.tsx                # Root layout
+├── backend/
+│   ├── main.py                   # FastAPI app entry point
+│   ├── api/                      # Route handlers
+│   │   ├── data.py               # CSV upload, validate, import
+│   │   ├── dashboard.py          # Dashboard analytics
+│   │   ├── pipeline.py           # Pipeline metadata
+│   │   ├── ask.py                # AI query endpoint
+│   │   └── ...
+│   ├── services/                 # Business logic
+│   │   ├── ingestion.py          # CSV parsing, column detection
+│   │   ├── analytics.py          # SQL analytics queries
+│   │   ├── validation.py         # Data quality checks
+│   │   ├── pipeline_metadata.py  # Pipeline run tracking
+│   │   └── llm.py                # Gemini AI integration
+│   └── db/
+│       ├── database.py           # asyncpg connection pool
+│       └── schema.sql            # Database DDL
+├── data_generator/
+│   ├── generate_data.py          # Synthetic data generation
+│   └── seed_data.py              # Database seeding
+├── next.config.ts                # API proxy rewrites
+├── package.json
+└── .env                          # Database + API keys
 ```
-
-to:
-
-```text
-SQL model
-```
-
-to:
-
-```text
-transformation
-```
-
-to:
-
-```text
-source record
-```
-
-and understand why the number is correct.
 
 ---
 
-# 28. Recommended demo script
+## SQL Concepts Demonstrated
 
-A strong 5-minute demo should be:
-
-### Step 1 — Load data
-
-Click:
-
-**Try Demo Data**
-
-Show:
-
-```text
-100,000 transactions
-50 users
-80 accounts
-```
-
-### Step 2 — Inspect raw data
-
-Show intentionally messy values:
-
-```text
-AMAZON
-Amazon.com
-AMZN
-```
-
-and invalid currency codes.
-
-### Step 3 — Run pipeline
-
-Show:
-
-```text
-Ingestion
-→ Staging
-→ Transform
-→ Quality
-→ Analytics
-```
-
-### Step 4 — Show SQL
-
-Click:
-
-**monthly_spending**
-
-Show the CTE and aggregation.
-
-### Step 5 — Show lineage
-
-Trace:
-
-```text
-raw.transactions
-→ stg_transactions
-→ int_clean_transactions
-→ monthly_spending
-→ dashboard
-```
-
-### Step 6 — Break it
-
-Inject duplicate transactions.
-
-Run quality checks.
-
-Show the failed SQL check.
-
-### Step 7 — Investigate
-
-Use Data Detective.
-
-Show affected records and root cause.
-
-### Step 8 — Fix
-
-Re-run the transformation and quality checks.
-
-Show:
-
-```text
-✓ Data quality passed
-```
-
-### Step 9 — Ask a question
-
-Ask:
-
-> Which merchant had the highest spending last month?
-
-Show:
-
-```text
-Question
-→ Generated SQL
-→ Validation
-→ Query result
-→ Answer
-```
-
-This demo communicates the entire project far better than simply opening a dashboard.
+| Concept | Where Used |
+|---|---|
+| **CTEs** | Monthly spending, merchant metrics, anomaly detection |
+| **JOINs** (LEFT, INNER) | Transactions ↔ merchants ↔ categories |
+| **Window Functions** (LAG, ROW_NUMBER) | Month-over-month comparisons |
+| **Rolling Windows** | 30-day rolling spending averages |
+| **Aggregations** (SUM, COUNT, AVG, STDDEV) | All analytics queries |
+| **Conditional Logic** (CASE WHEN) | Status handling, refund filtering |
+| **Deduplication** | GROUP BY + HAVING COUNT(*) > 1 |
+| **Date Functions** | DATE_TRUNC, TO_CHAR, interval arithmetic |
+| **Subqueries** | Subscription detection, anomaly flagging |
+| **Z-Score Analysis** | Spending anomaly detection with AVG + STDDEV |
 
 ---
 
-# 29. Resume positioning
+## Performance
 
-The strongest positioning is:
-
-> **Built a PostgreSQL-based financial data platform processing 100K synthetic transactions across 50 users and 80 accounts, with SQL staging/intermediate/mart models, data-quality validation, lineage, anomaly detection, and traceable analytics.**
-
-Then mention specific SQL concepts:
-
-> **Implemented CTEs, multi-table joins, window functions, rolling 30-day metrics, deduplication, merchant normalization, and anomaly detection.**
-
-Then mention the engineering layer:
-
-> **Built an observable ingestion-to-analytics pipeline with validation results, row-level diagnostics, pipeline metadata, and SQL lineage exposed through an interactive Next.js UI.**
-
-And finally the AI component:
-
-> **Added natural-language SQL generation with read-only validation and result inspection rather than executing LLM-generated SQL blindly.**
+| Operation | Metric |
+|---|---|
+| CSV upload (800 rows) | ~500ms |
+| Column auto-detection | ~1ms |
+| Validation (800 rows) | ~200ms |
+| Batch import (800 rows → Neon) | ~3s |
+| Dashboard overview query | ~150ms |
+| Data quality (8 checks) | ~500ms |
+| Demo data generation (100K) | ~30s |
 
 ---
 
-# 30. The final product vision
+## License
 
-FinSight should feel like this:
+MIT
 
-```text
-                FINSIGHT
+---
 
-       MESSY DATA → TRUSTED DATA
+<div align="center">
 
+Built by [Jatin Nath](https://github.com/jatinnathh) as a data engineering portfolio project.
 
-     ┌─────────┐
-     │  INPUT  │
-     └────┬────┘
-          ↓
-     ┌─────────┐
-     │ INGEST  │
-     └────┬────┘
-          ↓
-     ┌─────────┐
-     │  CLEAN  │
-     └────┬────┘
-          ↓
-     ┌─────────┐
-     │TRANSFORM│
-     └────┬────┘
-          ↓
-     ┌─────────┐
-     │ VALIDATE│
-     └────┬────┘
-          ↓
-     ┌─────────┐
-     │ ANALYZE │
-     └────┬────┘
-          ↓
-     ┌─────────┐
-     │ INSIGHT │
-     └─────────┘
-```
-
-The user should never have to wonder:
-
-> "What is this application actually doing?"
-
-They should be able to **follow the data through the pipeline and inspect the SQL responsible for every transformation and metric.**
-
+</div>
