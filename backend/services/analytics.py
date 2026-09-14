@@ -7,22 +7,38 @@ from backend.db.database import execute_query, execute_one
 
 async def get_overview():
     """Dashboard overview metrics."""
-    total = await execute_one("""
+    # Check if any data exists at all
+    all_time = await execute_one("SELECT COUNT(*) as cnt FROM transactions")
+
+    # Find the latest month that has data (may not be current month for uploaded CSVs)
+    latest_month = await execute_one("""
+        SELECT date_trunc('month', MAX(transaction_date)) as latest
+        FROM transactions
+        WHERE status = 'completed'
+    """)
+
+    # Use the latest month with data, or current month as fallback
+    if latest_month and latest_month["latest"]:
+        report_month_sql = f"'{latest_month['latest'].isoformat()}'::date"
+    else:
+        report_month_sql = "date_trunc('month', CURRENT_DATE)"
+
+    total = await execute_one(f"""
         SELECT
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_spending,
             COUNT(*) as total_transactions,
             COALESCE(AVG(CASE WHEN amount > 0 THEN amount END), 0) as avg_transaction
         FROM transactions
         WHERE status = 'completed'
-          AND transaction_date >= date_trunc('month', CURRENT_DATE)
+          AND transaction_date >= {report_month_sql}
     """)
 
-    prev_month = await execute_one("""
+    prev_month = await execute_one(f"""
         SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_spending
         FROM transactions
         WHERE status = 'completed'
-          AND transaction_date >= date_trunc('month', CURRENT_DATE) - interval '1 month'
-          AND transaction_date < date_trunc('month', CURRENT_DATE)
+          AND transaction_date >= {report_month_sql} - interval '1 month'
+          AND transaction_date < {report_month_sql}
     """)
 
     sub_total = await execute_one("""
@@ -39,6 +55,7 @@ async def get_overview():
     return {
         "total_spending": round(current_spending, 2),
         "total_transactions": total["total_transactions"],
+        "all_time_transactions": all_time["cnt"],
         "avg_transaction": round(float(total["avg_transaction"]), 2),
         "prev_month_spending": round(prev_spending, 2),
         "change_percent": change_pct,
@@ -54,7 +71,10 @@ async def get_spending_over_time(months: int = 12):
             SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as spending
         FROM transactions
         WHERE status = 'completed'
-          AND transaction_date >= CURRENT_DATE - make_interval(months => $1)
+          AND transaction_date >= COALESCE(
+              (SELECT MAX(transaction_date) FROM transactions) - make_interval(months => $1),
+              CURRENT_DATE - make_interval(months => $1)
+          )
         GROUP BY to_char(transaction_date, 'YYYY-MM')
         ORDER BY month
     """, months)
@@ -295,7 +315,10 @@ async def get_spending_by_category_monthly():
         LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
         LEFT JOIN categories c ON m.category_id = c.category_id
         WHERE t.status = 'completed' AND t.amount > 0
-          AND t.transaction_date >= CURRENT_DATE - interval '12 months'
+          AND t.transaction_date >= COALESCE(
+              (SELECT MAX(transaction_date) FROM transactions) - interval '12 months',
+              CURRENT_DATE - interval '12 months'
+          )
         GROUP BY to_char(t.transaction_date, 'YYYY-MM'), c.category_name
         ORDER BY month, total DESC
     """)
@@ -304,20 +327,27 @@ async def get_spending_by_category_monthly():
 
 async def get_data_detective():
     """Data Detective: anomaly investigation."""
-    # Current vs previous month spending
+    # Find latest month with data
+    latest = await execute_one("""
+        SELECT COALESCE(date_trunc('month', MAX(transaction_date)), date_trunc('month', CURRENT_DATE)) as m
+        FROM transactions WHERE status = 'completed'
+    """)
+    latest_month = latest["m"]
+
+    # Current (latest) vs previous month spending
     current = await execute_one("""
         SELECT COALESCE(SUM(amount), 0) as total
         FROM transactions
         WHERE status = 'completed' AND amount > 0
-          AND transaction_date >= date_trunc('month', CURRENT_DATE)
-    """)
+          AND transaction_date >= $1
+    """, latest_month)
     previous = await execute_one("""
         SELECT COALESCE(SUM(amount), 0) as total
         FROM transactions
         WHERE status = 'completed' AND amount > 0
-          AND transaction_date >= date_trunc('month', CURRENT_DATE) - interval '1 month'
-          AND transaction_date < date_trunc('month', CURRENT_DATE)
-    """)
+          AND transaction_date >= $1 - interval '1 month'
+          AND transaction_date < $1
+    """, latest_month)
 
     current_val = float(current["total"])
     prev_val = float(previous["total"])

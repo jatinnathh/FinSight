@@ -56,32 +56,92 @@ async def validate_mapping(data: ColumnMapping):
 
     mapped = apply_mapping(rows, headers, data.mapping)
 
-    issues = []
+    # Required fields: transaction_date and amount
+    # Optional fields: merchant, currency, status, transaction_type, description
+    REQUIRED_FIELDS = ["transaction_date", "amount"]
+    OPTIONAL_FIELDS = ["merchant", "currency", "status", "transaction_type", "description"]
+
+    errors = []
+    warnings = []
     valid_count = 0
+    invalid_count = 0
     invalid_dates = 0
     missing_amounts = 0
-    missing_merchants = 0
+
+    # Track missing optional fields
+    optional_missing_counts: dict[str, int] = {f: 0 for f in OPTIONAL_FIELDS}
+
+    # Detect which canonical fields are mapped
+    mapped_canonical = set(data.mapping.values()) - {"(skip)"}
+    missing_optional_fields = [f for f in OPTIONAL_FIELDS if f not in mapped_canonical]
+
+    # Duplicate detection: count rows with identical required+optional values
+    seen: dict[tuple, int] = {}
 
     for record in mapped:
-        if record.get("transaction_date") is None:
-            invalid_dates += 1
-        if record.get("amount") is None:
-            missing_amounts += 1
-        if not record.get("merchant"):
-            missing_merchants += 1
-        else:
-            valid_count += 1
+        has_valid_date = record.get("transaction_date") is not None
+        has_valid_amount = record.get("amount") is not None
 
+        if not has_valid_date:
+            invalid_dates += 1
+        if not has_valid_amount:
+            missing_amounts += 1
+
+        # A row is VALID when both required fields are present and parseable
+        if has_valid_date and has_valid_amount:
+            valid_count += 1
+        else:
+            invalid_count += 1
+
+        # Track missing optional fields per row
+        for field in OPTIONAL_FIELDS:
+            if not record.get(field):
+                optional_missing_counts[field] += 1
+
+        # Duplicate detection key
+        key = (
+            str(record.get("transaction_date")),
+            str(record.get("amount")),
+            record.get("merchant", ""),
+            record.get("currency", ""),
+            record.get("transaction_type", ""),
+        )
+        seen[key] = seen.get(key, 0) + 1
+
+    duplicate_count = sum(count - 1 for count in seen.values() if count > 1)
+
+    # Build errors (required field issues)
     if invalid_dates > 0:
-        issues.append({"type": "warn", "message": f"{invalid_dates} rows with unparseable dates"})
+        errors.append({"type": "error", "message": f"{invalid_dates} row(s) with unparseable or missing dates"})
     if missing_amounts > 0:
-        issues.append({"type": "fail", "message": f"{missing_amounts} rows with missing amounts"})
-    if missing_merchants > 0:
-        issues.append({"type": "warn", "message": f"{missing_merchants} rows with missing merchant"})
+        errors.append({"type": "error", "message": f"{missing_amounts} row(s) with missing or invalid amounts"})
+
+    # Build warnings (optional field issues)
+    if missing_optional_fields:
+        warnings.append({
+            "type": "warn",
+            "message": f"Unmapped optional columns: {', '.join(missing_optional_fields)}"
+        })
+    for field in OPTIONAL_FIELDS:
+        if field not in missing_optional_fields and optional_missing_counts[field] > 0:
+            warnings.append({
+                "type": "warn",
+                "message": f"{optional_missing_counts[field]} row(s) with missing {field}"
+            })
+    if duplicate_count > 0:
+        warnings.append({"type": "warn", "message": f"{duplicate_count} potential duplicate row(s)"})
+
+    # Backwards-compatible: merge into issues list for frontend
+    issues = errors + warnings
 
     return {
         "total_rows": len(rows),
         "valid_rows": valid_count,
+        "invalid_rows": invalid_count,
+        "errors": errors,
+        "warnings": warnings,
+        "missing_optional_fields": missing_optional_fields,
+        "duplicate_count": duplicate_count,
         "issues": issues,
     }
 
@@ -89,56 +149,117 @@ async def validate_mapping(data: ColumnMapping):
 @router.post("/import")
 async def import_data(data: ImportRequest):
     """Import mapped CSV data into the database."""
-    reader = csv.reader(io.StringIO(data.csv_content))
-    headers = next(reader)
-    rows = list(reader)
+    import decimal
+    import traceback
 
-    mapped = apply_mapping(rows, headers, data.mapping)
+    try:
+        reader = csv.reader(io.StringIO(data.csv_content))
+        headers = next(reader)
+        rows = list(reader)
 
-    inserted = 0
-    skipped = 0
-    pool = await get_pool()
+        mapped = apply_mapping(rows, headers, data.mapping)
 
-    async with pool.acquire() as conn:
+        # Pre-process: separate valid rows from invalid
+        valid_records = []
+        skipped = 0
+
         for record in mapped:
             if record.get("transaction_date") is None or record.get("amount") is None:
                 skipped += 1
                 continue
+            valid_records.append(record)
 
-            # Find or create merchant
-            merchant_id = None
-            if record.get("merchant"):
-                m = await conn.fetchrow(
-                    "SELECT merchant_id FROM merchants WHERE merchant_name = $1 OR normalized_name = $1 LIMIT 1",
-                    record["merchant"]
-                )
+        if not valid_records:
+            return {"inserted": 0, "skipped": skipped, "errors": []}
+
+        pool = await get_pool()
+        inserted = 0
+        errors = []
+
+        async with pool.acquire() as conn:
+            # Step 1: Batch-resolve merchants
+            unique_merchants = set()
+            for rec in valid_records:
+                m = rec.get("merchant")
                 if m:
-                    merchant_id = m["merchant_id"]
-                else:
-                    m = await conn.fetchrow(
+                    unique_merchants.add(m)
+
+            merchant_map: dict[str, int] = {}
+
+            if unique_merchants:
+                merchant_list = list(unique_merchants)
+                existing = await conn.fetch(
+                    "SELECT merchant_id, merchant_name, normalized_name FROM merchants WHERE merchant_name = ANY($1) OR normalized_name = ANY($1)",
+                    merchant_list
+                )
+                for row in existing:
+                    merchant_map[row["merchant_name"]] = row["merchant_id"]
+                    if row["normalized_name"]:
+                        merchant_map[row["normalized_name"]] = row["merchant_id"]
+
+                missing = [m for m in merchant_list if m not in merchant_map]
+                for m_name in missing:
+                    row = await conn.fetchrow(
                         "INSERT INTO merchants (merchant_name, normalized_name) VALUES ($1, $1) RETURNING merchant_id",
-                        record["merchant"]
+                        m_name
                     )
-                    merchant_id = m["merchant_id"]
+                    merchant_map[m_name] = row["merchant_id"]
 
-            await conn.execute(
-                """INSERT INTO transactions
-                   (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
-                data.account_id,
-                merchant_id,
-                record["transaction_date"],
-                record["amount"],
-                record.get("currency", "INR"),
-                record.get("status", "completed"),
-                record.get("transaction_type", "debit"),
-                record.get("description", record.get("merchant", "")),
-            )
-            inserted += 1
+            # Step 2: Build insert tuples
+            insert_tuples = []
+            for rec in valid_records:
+                merchant_name = rec.get("merchant")
+                merchant_id = merchant_map.get(merchant_name) if merchant_name else None
+                currency = rec.get("currency") or "INR"
+                status = rec.get("status") or "completed"
+                txn_type = rec.get("transaction_type") or "debit"
+                description = rec.get("description") or merchant_name or ""
 
-    await record_pipeline_run(inserted + skipped, skipped, "success")
+                insert_tuples.append((
+                    data.account_id,
+                    merchant_id,
+                    rec["transaction_date"],
+                    decimal.Decimal(str(rec["amount"])),
+                    currency,
+                    status,
+                    txn_type,
+                    description,
+                ))
 
-    return {"inserted": inserted, "skipped": skipped}
+            # Step 3: Batch insert
+            try:
+                await conn.executemany(
+                    """INSERT INTO transactions
+                       (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                    insert_tuples
+                )
+                inserted = len(insert_tuples)
+            except Exception as e:
+                errors.append({"row": 0, "error": str(e)})
+                # Fallback: row-by-row
+                for i, tup in enumerate(insert_tuples):
+                    try:
+                        await conn.execute(
+                            """INSERT INTO transactions
+                               (account_id, merchant_id, transaction_date, amount, currency, status, transaction_type, description)
+                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                            *tup
+                        )
+                        inserted += 1
+                    except Exception as row_err:
+                        skipped += 1
+                        if len(errors) < 20:
+                            errors.append({"row": i + 1, "error": str(row_err)})
+
+        await record_pipeline_run(inserted + skipped, skipped, "success" if inserted > 0 else "failed")
+
+        return {"inserted": inserted, "skipped": skipped, "errors": errors}
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"IMPORT ERROR: {tb}")
+        raise HTTPException(500, detail=f"Import failed: {str(e)}")
 
 
 @router.post("/load-demo")

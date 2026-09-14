@@ -24,6 +24,11 @@ export default function UploadPage() {
   const [validationResult, setValidationResult] = useState<{
     total_rows: number;
     valid_rows: number;
+    invalid_rows: number;
+    errors: { type: string; message: string }[];
+    warnings: { type: string; message: string }[];
+    missing_optional_fields: string[];
+    duplicate_count: number;
     issues: { type: string; message: string }[];
   } | null>(null);
   const [importResult, setImportResult] = useState<string | null>(null);
@@ -205,18 +210,40 @@ export default function UploadPage() {
             </div>
             <div className="detective-stat">
               <span className="label">Valid rows</span>
-              <span className="value">{validationResult.valid_rows.toLocaleString()}</span>
+              <span className="value" style={{ color: "var(--success, #22c55e)" }}>{validationResult.valid_rows.toLocaleString()}</span>
             </div>
+            <div className="detective-stat">
+              <span className="label">Invalid rows</span>
+              <span className="value" style={{ color: validationResult.invalid_rows > 0 ? "var(--danger, #ef4444)" : "inherit" }}>
+                {validationResult.invalid_rows.toLocaleString()}
+              </span>
+            </div>
+            {validationResult.duplicate_count > 0 && (
+              <div className="detective-stat">
+                <span className="label">Potential duplicates</span>
+                <span className="value">{validationResult.duplicate_count.toLocaleString()}</span>
+              </div>
+            )}
           </div>
 
-          {validationResult.issues.length > 0 && (
+          {validationResult.errors.length > 0 && (
             <div className="card" style={{ marginBottom: 16 }}>
-              <div className="card-title">Issues</div>
-              {validationResult.issues.map((issue, i) => (
+              <div className="card-title">Errors (required fields)</div>
+              {validationResult.errors.map((issue, i) => (
                 <div key={i} className="check-item">
-                  <span className={`check-icon ${issue.type}`}>
-                    {issue.type === "fail" ? "x" : "!"}
-                  </span>
+                  <span className="check-icon fail">✕</span>
+                  <span>{issue.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {validationResult.warnings.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card-title">Warnings (optional fields)</div>
+              {validationResult.warnings.map((issue, i) => (
+                <div key={i} className="check-item">
+                  <span className="check-icon warn">!</span>
                   <span>{issue.message}</span>
                 </div>
               ))}

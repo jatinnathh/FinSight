@@ -66,7 +66,7 @@ export default function DashboardPage() {
 
   if (loading) return <div className="loading">Loading...</div>;
 
-  if (!overview || overview.total_transactions === 0) {
+  if (!overview || (overview.total_transactions === 0 && !(overview as any).all_time_transactions)) {
     return (
       <div className="empty-state">
         <h3>No data yet</h3>
