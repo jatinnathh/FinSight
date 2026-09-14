@@ -1,147 +1,221 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
-const rawRows = [
-  { merchant: "AMAZON", amount: "1200", currency: "INR", date: "09/12/25", status: "Completed" },
-  { merchant: "Amazon.com", amount: "1200", currency: "INR", date: "2025-09-12", status: "completed" },
-  { merchant: "AMZN", amount: "1200", currency: "INR", date: "12-09-2025", status: "COMPLETED" },
-];
-
-const cleanRows = [
+const rawExamples = [
   {
-    merchant: "Amazon",
-    amount: "1200.00",
+    merchant: "AMZN",
+    currency: "inr",
+    status: "COMPLETED",
+    category: "NULL",
+    date: "12/03/26",
+  },
+  {
+    merchant: "Amazon.com",
     currency: "INR",
-    transaction_date: "2025-09-12",
     status: "completed",
+    category: "NULL",
+    date: "2026-03-12",
+  },
+  {
+    merchant: "amazon india",
+    currency: "Inr",
+    status: "Completed",
+    category: "NULL",
+    date: "03-12-2026",
   },
 ];
 
-const transformations = [
-  "Merchant normalization",
-  "Timestamp normalization",
-  "Currency validation",
-  "Duplicate detection",
-  "Status normalization",
+const cleanExample = {
+  merchant: "Amazon",
+  currency: "INR",
+  status: "completed",
+  category: "Shopping",
+  date: "2026-03-12",
+};
+
+const transformSteps = [
+  "UPPER(currency)",
+  "LOWER(status)",
+  "Merchant normalization via JOIN",
+  "Date parsing to YYYY-MM-DD",
+  "Category lookup via merchants → categories",
+  "Duplicate detection via ROW_NUMBER()",
 ];
 
-const sql = `WITH normalized AS (
-  SELECT
-    COALESCE(m.normalized_name, t.description) AS merchant,
-    t.amount,
-    UPPER(t.currency) AS currency,
-    t.transaction_date,
-    LOWER(t.status) AS status
-  FROM raw.transactions t
-  LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
-),
-deduped AS (
+const stagingSql = `-- stg_transactions: normalize raw fields
+SELECT
+  transaction_id,
+  account_id,
+  merchant_id,
+  transaction_date,
+  amount,
+  UPPER(currency) AS currency,
+  LOWER(status) AS status,
+  LOWER(transaction_type) AS transaction_type
+FROM raw.transactions
+WHERE transaction_date IS NOT NULL
+  AND amount IS NOT NULL;`;
+
+const cleanSql = `-- int_clean_transactions: join and enrich
+SELECT
+  t.*,
+  COALESCE(m.normalized_name, t.description, 'Unknown') AS merchant,
+  COALESCE(c.category_name, 'Uncategorized') AS category
+FROM stg_transactions t
+LEFT JOIN merchants m ON t.merchant_id = m.merchant_id
+LEFT JOIN categories c ON m.category_id = c.category_id
+WHERE t.currency IN ('INR', 'USD', 'EUR', 'GBP')
+  AND t.status IN ('completed', 'pending', 'failed', 'refunded');`;
+
+const dedupeSql = `-- Deduplication via window function
+WITH ranked AS (
   SELECT *,
-         ROW_NUMBER() OVER (
-           PARTITION BY merchant, amount, currency, transaction_date
-           ORDER BY transaction_date
-         ) AS row_number
-  FROM normalized
+    ROW_NUMBER() OVER (
+      PARTITION BY account_id, merchant_id,
+                   transaction_date, amount, currency
+      ORDER BY transaction_id
+    ) AS duplicate_rank
+  FROM stg_transactions
 )
-SELECT merchant, amount, currency, transaction_date, status
-FROM deduped
-WHERE row_number = 1
-  AND currency IN ('INR', 'USD', 'EUR', 'GBP')
-  AND status IN ('completed', 'pending', 'failed', 'refunded');`;
+SELECT * FROM ranked WHERE duplicate_rank = 1;`;
 
 export default function TransformationsPage() {
-  const [showSql, setShowSql] = useState(false);
+  const [selectedRaw, setSelectedRaw] = useState(0);
+  const [showSql, setShowSql] = useState<string | null>(null);
 
   return (
     <div>
       <h1 className="page-title">Transformations</h1>
       <p className="page-subtitle">
-        Before and after records showing how raw exports become modeled analytics data.
+        Watch a single raw record become a clean, modeled transaction through
+        SQL transformations.
       </p>
 
       <div className="split-workbench">
-        <div>
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div className="card-title">Raw Data</div>
-            <div className="data-table-mini">
-              <table>
-                <thead>
-                  <tr>
-                    {Object.keys(rawRows[0]).map((key) => (
-                      <th key={key}>{key}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rawRows.map((row) => (
-                    <tr key={`${row.merchant}-${row.date}`}>
-                      {Object.values(row).map((value) => (
-                        <td key={value}>{value}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Left: transformation showcase */}
+        <div className="transform-showcase">
+          {/* Raw record */}
+          <div className="transform-record">
+            <div className="transform-record-title">Raw Transaction</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {rawExamples.map((_, i) => (
+                <button
+                  key={i}
+                  className="btn"
+                  onClick={() => setSelectedRaw(i)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    background:
+                      selectedRaw === i ? "var(--foreground)" : undefined,
+                    color:
+                      selectedRaw === i ? "var(--background)" : undefined,
+                    borderColor:
+                      selectedRaw === i ? "var(--foreground)" : undefined,
+                  }}
+                >
+                  Variant {i + 1}
+                </button>
+              ))}
             </div>
-          </div>
-
-          <div className="transform-arrow">
-            |<br />
-            dbt transformation
-            <br />v
-          </div>
-
-          <div className="card">
-            <div className="card-title">Clean Model</div>
-            <div className="data-table-mini">
-              <table>
-                <thead>
-                  <tr>
-                    {Object.keys(cleanRows[0]).map((key) => (
-                      <th key={key}>{key}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {cleanRows.map((row) => (
-                    <tr key={row.transaction_date}>
-                      {Object.values(row).map((value) => (
-                        <td key={value}>{value}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <div className="detail-panel">
-          <div className="card-title">Transformations</div>
-          <div className="step-list">
-            {transformations.map((item) => (
-              <div className="step-row" key={item}>
-                <span>{item}</span>
-                <span className="badge pass">PASS</span>
+            {Object.entries(rawExamples[selectedRaw]).map(([key, val]) => (
+              <div className="transform-field" key={key}>
+                <span className="transform-field-name">{key}</span>
+                <span className={`transform-field-value${val === "NULL" || val === "inr" || val === "Inr" || val === "COMPLETED" || val === "Completed" || val === "AMZN" || val === "amazon india" || val === "Amazon.com" || val === "12/03/26" || val === "03-12-2026" ? " dirty" : ""}`}>
+                  {val}
+                </span>
               </div>
             ))}
           </div>
 
-          <button
-            className="btn"
-            style={{ marginTop: 18 }}
-            onClick={() => setShowSql((value) => !value)}
-          >
-            {showSql ? "Hide SQL" : "View SQL"}
-          </button>
+          {/* Arrow */}
+          <div className="transform-center-arrow">↓</div>
+
+          {/* SQL steps */}
+          <div className="transform-sql-list">
+            <div className="transform-record-title" style={{ marginBottom: 8 }}>
+              SQL Transformation
+            </div>
+            {transformSteps.map((step) => (
+              <div className="transform-sql-item" key={step}>
+                {step}
+              </div>
+            ))}
+          </div>
+
+          {/* Arrow */}
+          <div className="transform-center-arrow">↓</div>
+
+          {/* Clean record */}
+          <div className="transform-record" style={{ borderColor: "var(--success)" }}>
+            <div className="transform-record-title" style={{ color: "var(--success)" }}>
+              Modeled Transaction
+            </div>
+            {Object.entries(cleanExample).map(([key, val]) => (
+              <div className="transform-field" key={key}>
+                <span className="transform-field-name">{key}</span>
+                <span className="transform-field-value clean">{val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: detail panel */}
+        <div className="detail-panel">
+          <div className="card-title">SQL Models</div>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14, lineHeight: 1.6 }}>
+            Three SQL models transform raw bank exports into clean, deduplicated,
+            categorized transactions.
+          </p>
+
+          <div className="step-list">
+            <button
+              className="step-row"
+              onClick={() => setShowSql(showSql === "staging" ? null : "staging")}
+              style={{ cursor: "pointer", background: "none", border: 0, borderBottom: "1px solid var(--border)", fontFamily: "inherit", textAlign: "left", width: "100%" }}
+            >
+              <span>stg_transactions</span>
+              <span className="badge pass">STAGING</span>
+            </button>
+            <button
+              className="step-row"
+              onClick={() => setShowSql(showSql === "clean" ? null : "clean")}
+              style={{ cursor: "pointer", background: "none", border: 0, borderBottom: "1px solid var(--border)", fontFamily: "inherit", textAlign: "left", width: "100%" }}
+            >
+              <span>int_clean_transactions</span>
+              <span className="badge pass">INTERMEDIATE</span>
+            </button>
+            <button
+              className="step-row"
+              onClick={() => setShowSql(showSql === "dedupe" ? null : "dedupe")}
+              style={{ cursor: "pointer", background: "none", border: 0, fontFamily: "inherit", textAlign: "left", width: "100%" }}
+            >
+              <span>deduplication</span>
+              <span className="badge pass">QUALITY</span>
+            </button>
+          </div>
 
           {showSql && (
             <div className="modal-surface">
-              <div className="card-title">stg_transactions.sql</div>
-              <div className="sql-block">{sql}</div>
+              <div className="card-title">
+                {showSql === "staging" ? "stg_transactions.sql" : showSql === "clean" ? "int_clean_transactions.sql" : "deduplication.sql"}
+              </div>
+              <div className="sql-block">
+                {showSql === "staging" ? stagingSql : showSql === "clean" ? cleanSql : dedupeSql}
+              </div>
             </div>
           )}
+
+          <div style={{ marginTop: 18 }}>
+            <Link href="/lineage" className="btn" style={{ marginRight: 8 }}>
+              View Lineage
+            </Link>
+            <Link href="/data-quality" className="btn">
+              View Quality Checks
+            </Link>
+          </div>
         </div>
       </div>
     </div>

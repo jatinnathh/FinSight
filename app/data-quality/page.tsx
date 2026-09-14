@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 interface Check {
   check_name: string;
@@ -21,6 +22,7 @@ export default function DataQualityPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [showRecords, setShowRecords] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -50,14 +52,13 @@ export default function DataQualityPage() {
       return;
     }
     const checkName = selected.check_name;
+    setShowRecords(false);
 
     async function loadDetail() {
       setDetailLoading(true);
       try {
         const res = await fetch(
-          `/api/v1/data/quality/detail?check_name=${encodeURIComponent(
-            checkName
-          )}`
+          `/api/v1/data/quality/detail?check_name=${encodeURIComponent(checkName)}`
         );
         if (res.ok) {
           setDetail(await res.json());
@@ -81,21 +82,22 @@ export default function DataQualityPage() {
     <div>
       <h1 className="page-title">Data Quality</h1>
       <p className="page-subtitle">
-        Click a check to inspect affected records and the SQL behind it.
+        Investigate data-quality failures. Click a check to see the SQL and
+        affected records.
       </p>
 
       <div className="metrics-grid" style={{ marginBottom: 24 }}>
         <div className="card">
           <div className="card-title">Passed</div>
-          <div className="card-value">{passed}</div>
+          <div className="card-value" style={{ color: "var(--success)" }}>{passed}</div>
         </div>
         <div className="card">
           <div className="card-title">Warnings</div>
-          <div className="card-value">{warned}</div>
+          <div className="card-value" style={{ color: "var(--warning)" }}>{warned}</div>
         </div>
         <div className="card">
           <div className="card-title">Failed</div>
-          <div className="card-value">{failed}</div>
+          <div className="card-value" style={{ color: "var(--danger)" }}>{failed}</div>
         </div>
       </div>
 
@@ -120,12 +122,12 @@ export default function DataQualityPage() {
             >
               <span className={`check-icon ${check.status}`}>
                 {check.status === "pass"
-                  ? "v"
+                  ? "✓"
                   : check.status === "warn"
-                    ? "!"
+                    ? "⚠"
                     : check.status === "fail"
-                      ? "x"
-                      : "-"}
+                      ? "✗"
+                      : "·"}
               </span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 500 }}>{check.check_name}</div>
@@ -136,9 +138,10 @@ export default function DataQualityPage() {
               {check.affected_rows > 0 && check.status !== "info" && (
                 <span
                   style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     fontFamily: "var(--font-mono), monospace",
-                    color: "var(--muted)",
+                    fontWeight: 600,
+                    color: check.status === "fail" ? "var(--danger)" : "var(--warning)",
                   }}
                 >
                   {check.affected_rows.toLocaleString()}
@@ -154,7 +157,7 @@ export default function DataQualityPage() {
             <>
               <div className="detective-stat">
                 <span className="label">Status</span>
-                <span className={`badge ${selected.status}`}>
+                <span className={`badge ${selected.status === "pass" ? "success-badge" : selected.status === "fail" ? "danger-badge" : selected.status === "warn" ? "warn-badge" : ""}`}>
                   {selected.status.toUpperCase()}
                 </span>
               </div>
@@ -167,8 +170,30 @@ export default function DataQualityPage() {
 
               {!detailLoading && selected.status !== "info" && detail && (
                 <>
-                  {detail.records.length > 0 ? (
+                  {/* SQL Section — always shown for investigation */}
+                  {detail.sql && (
                     <div style={{ marginTop: 18 }}>
+                      <div className="card-title">SQL Check</div>
+                      <div className="sql-block">{detail.sql}</div>
+                    </div>
+                  )}
+
+                  {/* Show Records toggle */}
+                  {detail.records.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
+                      <button
+                        className="btn"
+                        onClick={() => setShowRecords(!showRecords)}
+                      >
+                        {showRecords
+                          ? "Hide Records"
+                          : `Show ${detail.records.length} Records`}
+                      </button>
+                    </div>
+                  )}
+
+                  {showRecords && detail.records.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
                       <div className="card-title">Affected Records</div>
                       <div className="data-table-mini">
                         <table>
@@ -193,18 +218,22 @@ export default function DataQualityPage() {
                         </table>
                       </div>
                     </div>
-                  ) : (
-                    <p style={{ color: "var(--muted)", fontSize: 13 }}>
+                  )}
+
+                  {detail.records.length === 0 && (
+                    <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 14 }}>
                       No affected records found for this check.
                     </p>
                   )}
 
-                  {detail.sql && (
-                    <div style={{ marginTop: 18 }}>
-                      <div className="card-title">SQL Check</div>
-                      <div className="sql-block">{detail.sql}</div>
-                    </div>
-                  )}
+                  <div style={{ marginTop: 18, display: "flex", gap: 8 }}>
+                    <Link href="/lineage" className="btn">
+                      View Lineage
+                    </Link>
+                    <Link href="/pipeline" className="btn">
+                      View Pipeline
+                    </Link>
+                  </div>
                 </>
               )}
             </>

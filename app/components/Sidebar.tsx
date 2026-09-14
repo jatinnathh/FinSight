@@ -3,23 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const NAV_ITEMS = [
-  { section: "Overview" },
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/transactions", label: "Transactions" },
-  { href: "/analytics", label: "Analytics" },
-  { section: "Data" },
-  { href: "/add-data", label: "Add Data" },
-  { href: "/data-quality", label: "Data Quality" },
-  { href: "/transformations", label: "Transformations" },
-  { href: "/lineage", label: "Lineage" },
-  { section: "Pipeline" },
-  { href: "/pipeline", label: "Pipeline Runs" },
-  { section: "Intelligence" },
-  { href: "/data-detective", label: "Data Detective" },
-  { href: "/ask", label: "Ask FinSight" },
+const JOURNEY_STEPS = [
+  { href: "/add-data", label: "Add Data", step: 1 },
+  { href: "/transactions", label: "Inspect", step: 2 },
+  { href: "/data-quality", label: "Validate", step: 3 },
+  { href: "/transformations", label: "Transform", step: 4 },
+  { href: "/lineage", label: "Trace", step: 5 },
+  { href: "/dashboard", label: "Analyze", step: 6 },
+  { href: "/data-detective", label: "Investigate", step: 7 },
+];
+
+const TOOLS = [
   { href: "/sql-lab", label: "SQL Lab" },
-  { section: "Finance" },
+  { href: "/break-pipeline", label: "Break Pipeline" },
+  { href: "/ask", label: "Ask FinSight" },
+  { href: "/pipeline", label: "Pipeline Runs" },
+];
+
+const EXTRAS = [
+  { href: "/analytics", label: "Analytics" },
   { href: "/budgets", label: "Budgets" },
   { href: "/subscriptions", label: "Subscriptions" },
 ];
@@ -29,23 +31,52 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">FinSight</div>
+      <Link href="/" className="sidebar-logo" style={{ textDecoration: "none", color: "inherit" }}>
+        FinSight
+      </Link>
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item, i) => {
-          if ("section" in item && item.section) {
-            return (
-              <div key={i} className="sidebar-section">
-                {item.section}
-              </div>
-            );
-          }
+        <div className="sidebar-section">Journey</div>
+        {JOURNEY_STEPS.map((item) => {
           const isActive =
             pathname === item.href ||
-            (item.href && item.href !== "/" && pathname?.startsWith(item.href));
+            (item.href !== "/" && pathname?.startsWith(item.href));
           return (
             <Link
               key={item.href}
-              href={item.href || "/"}
+              href={item.href}
+              className={`sidebar-link${isActive ? " active" : ""}`}
+            >
+              <span className="sidebar-step-num">{item.step}</span>
+              {item.label}
+            </Link>
+          );
+        })}
+
+        <div className="sidebar-section">Tools</div>
+        {TOOLS.map((item) => {
+          const isActive =
+            pathname === item.href ||
+            (item.href !== "/" && pathname?.startsWith(item.href));
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`sidebar-link${isActive ? " active" : ""}`}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
+
+        <div className="sidebar-section">More</div>
+        {EXTRAS.map((item) => {
+          const isActive =
+            pathname === item.href ||
+            (item.href !== "/" && pathname?.startsWith(item.href));
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
               className={`sidebar-link${isActive ? " active" : ""}`}
             >
               {item.label}

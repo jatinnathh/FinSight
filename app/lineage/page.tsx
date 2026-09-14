@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 type Model = {
   id: string;
@@ -9,16 +10,30 @@ type Model = {
   output: string;
   usedBy: string[];
   sql: string;
+  description: string;
 };
 
 const models: Model[] = [
   {
+    id: "csv",
+    label: "CSV / API",
+    source: "Bank export, demo generator, or future API ingestion",
+    output: "raw.transactions",
+    usedBy: ["raw.transactions"],
+    description: "External data source",
+    sql: `-- No SQL at this layer
+-- Data arrives as CSV files or API payloads
+-- The Python ingestion service parses and loads rows`,
+  },
+  {
     id: "raw",
     label: "raw.transactions",
-    source: "CSV upload, demo generator, or future API ingestion",
+    source: "CSV / API",
     output: "stg_transactions",
     usedBy: ["stg_transactions"],
-    sql: `SELECT *
+    description: "100K raw records in PostgreSQL",
+    sql: `-- Raw layer: exact copy of source data
+SELECT *
 FROM transactions;`,
   },
   {
@@ -27,6 +42,7 @@ FROM transactions;`,
     source: "raw.transactions",
     output: "int_clean_transactions",
     usedBy: ["int_clean_transactions", "Data Quality"],
+    description: "Normalized currencies, statuses, timestamps",
     sql: `SELECT
   transaction_id,
   account_id,
@@ -46,6 +62,7 @@ WHERE transaction_date IS NOT NULL
     source: "stg_transactions",
     output: "monthly_spending, merchant_metrics",
     usedBy: ["monthly_spending", "merchant_metrics"],
+    description: "Joined with merchants and categories, filtered for valid records",
     sql: `SELECT
   t.*,
   COALESCE(m.normalized_name, t.description, 'Unknown') AS merchant,
@@ -60,8 +77,9 @@ WHERE t.currency IN ('INR', 'USD', 'EUR', 'GBP')
     id: "monthly",
     label: "monthly_spending",
     source: "int_clean_transactions",
-    output: "dashboard",
+    output: "Dashboard",
     usedBy: ["Dashboard", "Analytics", "Ask FinSight"],
+    description: "Monthly spending aggregation per account",
     sql: `WITH monthly AS (
   SELECT
     account_id,
@@ -79,8 +97,9 @@ FROM monthly;`,
     id: "merchant",
     label: "merchant_metrics",
     source: "int_clean_transactions",
-    output: "analytics",
+    output: "Analytics",
     usedBy: ["Analytics", "Data Detective", "Ask FinSight"],
+    description: "Merchant-level aggregation with categories",
     sql: `SELECT
   merchant,
   category,
@@ -93,11 +112,13 @@ GROUP BY merchant, category;`,
   },
   {
     id: "dashboard",
-    label: "dashboard",
+    label: "Dashboard",
     source: "monthly_spending, merchant_metrics",
     output: "FinSight UI",
     usedBy: ["Recruiter demo", "User decisions"],
-    sql: `SELECT
+    description: "Final analytics layer served to the UI",
+    sql: `-- Dashboard queries the mart models
+SELECT
   SUM(spending) AS total_spending
 FROM monthly_spending
 WHERE month = DATE_TRUNC('month', CURRENT_DATE);`,
@@ -105,19 +126,22 @@ WHERE month = DATE_TRUNC('month', CURRENT_DATE);`,
 ];
 
 export default function LineagePage() {
-  const [selectedId, setSelectedId] = useState("monthly");
+  const [selectedId, setSelectedId] = useState("int");
   const selected = models.find((model) => model.id === selectedId) || models[0];
 
   return (
     <div>
-      <h1 className="page-title">Lineage</h1>
+      <h1 className="page-title">Data Lineage</h1>
       <p className="page-subtitle">
-        Trace a dashboard number back through source data, SQL models, and quality checks.
+        Trace any dashboard number back through the SQL pipeline to raw source
+        data. Click a node to inspect its model.
       </p>
 
       <div className="detail-grid">
         <div className="lineage-canvas">
           <div className="lineage-graph">
+            <LineageNode modelId="csv" selectedId={selectedId} onSelect={setSelectedId} />
+            <Connector />
             <LineageNode modelId="raw" selectedId={selectedId} onSelect={setSelectedId} />
             <Connector />
             <LineageNode modelId="stg" selectedId={selectedId} onSelect={setSelectedId} />
@@ -134,9 +158,18 @@ export default function LineagePage() {
         </div>
 
         <div className="detail-panel">
-          <div className="card-title">{selected.label}</div>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "1px", color: "var(--muted)", marginBottom: 4 }}>
+            Model
+          </div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 4px", fontFamily: "var(--font-mono), monospace" }}>
+            {selected.label}
+          </h2>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16, lineHeight: 1.5 }}>
+            {selected.description}
+          </p>
+
           <div className="detective-stat">
-            <span className="label">Source</span>
+            <span className="label">Input</span>
             <span className="value">{selected.source}</span>
           </div>
           <div className="detective-stat">
@@ -145,20 +178,29 @@ export default function LineagePage() {
           </div>
 
           <div style={{ marginTop: 18 }}>
-            <div className="card-title">SQL</div>
-            <div className="sql-block">{selected.sql}</div>
-          </div>
-
-          <div style={{ marginTop: 18 }}>
             <div className="card-title">Used By</div>
             <div className="step-list">
               {selected.usedBy.map((consumer) => (
                 <div className="step-row" key={consumer}>
                   <span>{consumer}</span>
-                  <span className="badge info">CONSUMER</span>
+                  <span className="badge" style={{ fontSize: 10 }}>CONSUMER</span>
                 </div>
               ))}
             </div>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <div className="card-title">SQL</div>
+            <div className="sql-block">{selected.sql}</div>
+          </div>
+
+          <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Link href="/transactions" className="btn">
+              View Source Records
+            </Link>
+            <Link href="/data-quality" className="btn">
+              View Quality Checks
+            </Link>
           </div>
         </div>
       </div>
@@ -184,10 +226,11 @@ function LineageNode({
       onClick={() => onSelect(modelId)}
     >
       {model.label}
+      <div className="lineage-node-label">{model.description}</div>
     </button>
   );
 }
 
 function Connector() {
-  return <div className="pipeline-connector">|</div>;
+  return <div className="pipeline-connector">│</div>;
 }

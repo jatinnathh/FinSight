@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   XAxis,
   YAxis,
@@ -82,7 +83,10 @@ export default function DashboardPage() {
   return (
     <div>
       <h1 className="page-title">Dashboard</h1>
-      <p className="page-subtitle">This month</p>
+      <p className="page-subtitle">
+        Every number is traceable. Click &ldquo;ⓘ How calculated&rdquo; to see
+        the SQL, source model, and lineage.
+      </p>
 
       <div className="metrics-grid">
         <div className="card">
@@ -97,7 +101,7 @@ export default function DashboardPage() {
             {overview.change_percent}% vs last month
           </div>
           <button className="metric-link" onClick={() => setSelectedMetric("total")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
         <div className="card">
@@ -106,7 +110,7 @@ export default function DashboardPage() {
             {formatCurrency(overview.avg_transaction)}
           </div>
           <button className="metric-link" onClick={() => setSelectedMetric("average")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
         <div className="card">
@@ -115,7 +119,7 @@ export default function DashboardPage() {
             {overview.total_transactions.toLocaleString()}
           </div>
           <button className="metric-link" onClick={() => setSelectedMetric("transactions")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
         <div className="card">
@@ -125,7 +129,7 @@ export default function DashboardPage() {
           </div>
           <div className="card-change">/month</div>
           <button className="metric-link" onClick={() => setSelectedMetric("subscriptions")}>
-            How calculated
+            ⓘ How calculated
           </button>
         </div>
       </div>
@@ -229,10 +233,10 @@ export default function DashboardPage() {
 }
 
 function formatCurrency(n: number): string {
-  if (n >= 10000000) return `${(n / 10000000).toFixed(1)}Cr`;
-  if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return n.toFixed(0);
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
+  return `₹${n.toFixed(0)}`;
 }
 
 const metricDefinitions: Record<
@@ -244,6 +248,7 @@ const metricDefinitions: Record<
     filters: string;
     aggregation: string;
     sql: string;
+    lineageNode: string;
   }
 > = {
   total: {
@@ -252,6 +257,7 @@ const metricDefinitions: Record<
     model: "monthly_spending.sql",
     filters: "status = 'completed', amount > 0, current month",
     aggregation: "SUM(amount)",
+    lineageNode: "monthly",
     sql: `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_spending
 FROM transactions
 WHERE status = 'completed'
@@ -263,6 +269,7 @@ WHERE status = 'completed'
     model: "monthly_spending.sql",
     filters: "status = 'completed', amount > 0, current month",
     aggregation: "AVG(amount)",
+    lineageNode: "monthly",
     sql: `SELECT COALESCE(AVG(CASE WHEN amount > 0 THEN amount END), 0) AS avg_transaction
 FROM transactions
 WHERE status = 'completed'
@@ -274,6 +281,7 @@ WHERE status = 'completed'
     model: "stg_transactions.sql",
     filters: "status = 'completed', current month",
     aggregation: "COUNT(*)",
+    lineageNode: "stg",
     sql: `SELECT COUNT(*) AS total_transactions
 FROM transactions
 WHERE status = 'completed'
@@ -285,6 +293,7 @@ WHERE status = 'completed'
     model: "subscription_detection.sql",
     filters: "recurring merchants with similar amount and interval",
     aggregation: "SUM(monthly amount)",
+    lineageNode: "merchant",
     sql: `SELECT COALESCE(SUM(amount), 0) AS total
 FROM subscriptions;`,
   },
@@ -326,10 +335,18 @@ function MetricDisclosure({
         </div>
         <div>
           <div className="card-title">Aggregation</div>
-          <div style={{ fontSize: 13 }}>{metric.aggregation}</div>
+          <div style={{ fontSize: 13, fontFamily: "var(--font-mono), monospace" }}>{metric.aggregation}</div>
         </div>
       </div>
       <div className="sql-block">{metric.sql}</div>
+      <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+        <Link href="/lineage" className="btn">
+          View Lineage
+        </Link>
+        <Link href="/data-quality" className="btn">
+          View Quality Checks
+        </Link>
+      </div>
     </div>
   );
 }
