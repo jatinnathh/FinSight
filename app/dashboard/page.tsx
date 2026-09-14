@@ -138,7 +138,8 @@ export default function DashboardPage() {
                   }
                 />
                 <Tooltip
-                  formatter={(v: number) => [formatCurrency(v), "Spending"]}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(v: any) => [formatCurrency(Number(v)), "Spending"]}
                   contentStyle={{
                     fontSize: 12,
                     border: "1px solid #e0e0e0",
